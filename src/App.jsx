@@ -53,31 +53,39 @@ function ProgressBar({ percent }) {
 export default function App() {
   const [date, setDate] = useState(getToday());
   const [tasks, setTasks] = useState(DEFAULT_TASKS);
-  const [records, setRecords] = useState({});
+
+  // === 新增：读取本地保存的记录 ===
+  const [records, setRecords] = useState(() => {
+    const local = localStorage.getItem("taskRecords");
+    return local ? JSON.parse(local) : {};
+  });
+
   const [editMode, setEditMode] = useState(false);
   const [newTaskName, setNewTaskName] = useState({});
   const [tab, setTab] = useState(Object.keys(DEFAULT_TASKS)[0]);
-  const [weekStart, setWeekStart] = useState(getWeekDates(date)[0]); // 本周起始日
+  const [weekStart, setWeekStart] = useState(getWeekDates(date)[0]);
 
-  // 勾选
+  // === 修改：每次勾选都自动保存到本地 ===
   function toggleCheck(cat, idx) {
-    setRecords((prev) => {
+    setRecords(prev => {
       const day = { ...(prev[date] || {}) };
       day[cat] = [...(day[cat] || Array(tasks[cat].length).fill(false))];
       day[cat][idx] = !day[cat][idx];
-      return { ...prev, [date]: day };
+      const newRecords = { ...prev, [date]: day };
+      localStorage.setItem("taskRecords", JSON.stringify(newRecords)); // 本地保存
+      return newRecords;
     });
   }
   function addTask(cat) {
     if (!newTaskName[cat] || !newTaskName[cat].trim()) return;
-    setTasks((prev) => ({
+    setTasks(prev => ({
       ...prev,
       [cat]: [...prev[cat], newTaskName[cat].trim()]
     }));
     setNewTaskName({ ...newTaskName, [cat]: "" });
   }
   function deleteTask(cat, idx) {
-    setTasks((prev) => {
+    setTasks(prev => {
       const arr = [...prev[cat]];
       arr.splice(idx, 1);
       return { ...prev, [cat]: arr };
@@ -86,25 +94,23 @@ export default function App() {
   function addCategory() {
     const name = prompt("请输入新学科名");
     if (name && !tasks[name]) {
-      setTasks((prev) => ({ ...prev, [name]: [] }));
+      setTasks(prev => ({ ...prev, [name]: [] }));
     }
   }
   function deleteCategory(cat) {
     if (window.confirm(`确定删除学科【${cat}】吗？`)) {
-      setTasks((prev) => {
+      setTasks(prev => {
         const cp = { ...prev };
         delete cp[cat];
         return cp;
       });
     }
   }
-  // 日期切换
   function shiftDate(d) {
     const dt = new Date(date);
     dt.setDate(dt.getDate() + d);
     setDate(dt.toISOString().split("T")[0]);
   }
-  // 周切换
   function shiftWeek(d) {
     const monday = new Date(weekStart);
     monday.setDate(monday.getDate() + d * 7);
@@ -126,12 +132,9 @@ export default function App() {
   else if (percent >= 70) award = "🌟 还差一点就全部完成啦，加油！";
   else if (done > 0) award = `已完成 ${done}/${total} 项，继续努力！`;
 
-  // 彩色学科Tab配色
   const tabColors = [
     "#ff6b81", "#5f8ef7", "#22c993", "#ffb549", "#ae8afc", "#ec8ad9"
   ];
-
-  // 周视图
   const weekDates = getWeekDates(weekStart);
   function getDayProgress(day) {
     const rec = records[day] || {};
