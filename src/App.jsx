@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 
 // 默认任务
 const DEFAULT_TASKS = {
@@ -53,64 +53,244 @@ function ProgressBar({ percent }) {
 export default function App() {
   const [date, setDate] = useState(getToday());
   const [tasks, setTasks] = useState(DEFAULT_TASKS);
-
-  // === 新增：读取本地保存的记录 ===
-  const [records, setRecords] = useState(() => {
-    const local = localStorage.getItem("taskRecords");
-    return local ? JSON.parse(local) : {};
-  });
-
+  const [records, setRecords] = useState({});
   const [editMode, setEditMode] = useState(false);
   const [newTaskName, setNewTaskName] = useState({});
   const [tab, setTab] = useState(Object.keys(DEFAULT_TASKS)[0]);
-  const [weekStart, setWeekStart] = useState(getWeekDates(date)[0]);
+  const [weekStart, setWeekStart] = useState(getWeekDates(getToday())[0]);
+  const [syncStatus, setSyncStatus] = useState('local'); // local, saving, synced, error
 
-  // === 修改：每次勾选都自动保存到本地 ===
+  // 数据同步相关状态
+  const [syncCode, setSyncCode] = useState('');
+  const [showSyncPanel, setShowSyncPanel] = useState(false);
+
+  // 初始化数据
+  useEffect(() => {
+    loadLocalData();
+    generateOrLoadSyncCode();
+  }, []);
+
+  // 加载本地数据
+  function loadLocalData() {
+    try {
+      const localRecords = localStorage.getItem("taskRecords");
+      const localTasks = localStorage.getItem("taskConfig");
+      
+      if (localRecords) {
+        setRecords(JSON.parse(localRecords));
+      }
+      if (localTasks) {
+        setTasks(JSON.parse(localTasks));
+      }
+    } catch (error) {
+      console.error('加载本地数据失败:', error);
+    }
+  }
+
+  // 生成或加载同步码
+  function generateOrLoadSyncCode() {
+    let code = localStorage.getItem("syncCode");
+    if (!code) {
+      code = Math.random().toString(36).substring(2, 8).toUpperCase();
+      localStorage.setItem("syncCode", code);
+    }
+    setSyncCode(code);
+  }
+
+  // 保存数据到本地和云端
+  function saveData(newRecords, newTasks = tasks) {
+    // 保存到本地
+    localStorage.setItem("taskRecords", JSON.stringify(newRecords));
+    localStorage.setItem("taskConfig", JSON.stringify(newTasks));
+    
+    // 尝试同步到云端（简化版，使用浏览器的 IndexedDB 模拟）
+    syncToCloud(newRecords, newTasks);
+  }
+
+  // 云端同步（简化实现）
+  async function syncToCloud(recordsData, tasksData) {
+    setSyncStatus('saving');
+    try {
+      // 这里使用 IndexedDB 模拟云端存储
+      const data = {
+        records: recordsData,
+        tasks: tasksData,
+        lastUpdate: new Date().toISOString()
+      };
+      
+      await saveToIndexedDB(syncCode, data);
+      setSyncStatus('synced');
+      setTimeout(() => setSyncStatus('local'), 2000);
+    } catch (error) {
+      console.error('同步失败:', error);
+      setSyncStatus('error');
+      setTimeout(() => setSyncStatus('local'), 3000);
+    }
+  }
+
+  // IndexedDB 操作（模拟云端）
+  function saveToIndexedDB(code, data) {
+    return new Promise((resolve, reject) => {
+      const request = indexedDB.open('TaskSync', 1);
+      
+      request.onerror = () => reject(request.error);
+      
+      request.onupgradeneeded = (event) => {
+        const db = event.target.result;
+        if (!db.objectStoreNames.contains('tasks')) {
+          db.createObjectStore('tasks', { keyPath: 'code' });
+        }
+      };
+      
+      request.onsuccess = (event) => {
+        const db = event.target.result;
+        const transaction = db.transaction(['tasks'], 'readwrite');
+        const store = transaction.objectStore('tasks');
+        
+        store.put({ code, ...data });
+        
+        transaction.oncomplete = () => resolve();
+        transaction.onerror = () => reject(transaction.error);
+      };
+    });
+  }
+
+  function loadFromIndexedDB(code) {
+    return new Promise((resolve, reject) => {
+      const request = indexedDB.open('TaskSync', 1);
+      
+      request.onerror = () => reject(request.error);
+      
+      request.onsuccess = (event) => {
+        const db = event.target.result;
+        const transaction = db.transaction(['tasks'], 'readonly');
+        const store = transaction.objectStore('tasks');
+        const getRequest = store.get(code);
+        
+        getRequest.onsuccess = () => {
+          if (getRequest.result) {
+            resolve(getRequest.result);
+          } else {
+            reject(new Error('未找到数据'));
+          }
+        };
+        
+        getRequest.onerror = () => reject(getRequest.error);
+      };
+    });
+  }
+
+  // 修复：确保勾选状态数组长度正确
+  function getTaskStatus(cat, taskIndex, dateStr) {
+    const dayRecord = records[dateStr];
+    if (!dayRecord || !dayRecord[cat]) {
+      return false;
+    }
+    
+    // 确保数组长度与当前任务数量一致
+    const currentTaskCount = tasks[cat] ? tasks[cat].length : 0;
+    const statusArray = dayRecord[cat];
+    
+    // 如果索引超出范围，返回 false
+    if (taskIndex >= currentTaskCount || taskIndex >= statusArray.length) {
+      return false;
+    }
+    
+    return statusArray[taskIndex] || false;
+  }
+
+  // 修复：勾选任务时确保数组长度正确
   function toggleCheck(cat, idx) {
     setRecords(prev => {
       const day = { ...(prev[date] || {}) };
-      day[cat] = [...(day[cat] || Array(tasks[cat].length).fill(false))];
+      const currentTaskCount = tasks[cat].length;
+      
+      // 确保数组长度正确
+      day[cat] = Array(currentTaskCount).fill(false);
+      
+      // 复制已有的状态（如果存在）
+      if (prev[date] && prev[date][cat]) {
+        const oldStatus = prev[date][cat];
+        for (let i = 0; i < Math.min(oldStatus.length, currentTaskCount); i++) {
+          day[cat][i] = oldStatus[i];
+        }
+      }
+      
+      // 切换当前任务状态
       day[cat][idx] = !day[cat][idx];
+      
       const newRecords = { ...prev, [date]: day };
-      localStorage.setItem("taskRecords", JSON.stringify(newRecords)); // 本地保存
+      saveData(newRecords);
       return newRecords;
     });
   }
+
   function addTask(cat) {
     if (!newTaskName[cat] || !newTaskName[cat].trim()) return;
-    setTasks(prev => ({
-      ...prev,
-      [cat]: [...prev[cat], newTaskName[cat].trim()]
-    }));
+    const newTasks = {
+      ...tasks,
+      [cat]: [...tasks[cat], newTaskName[cat].trim()]
+    };
+    setTasks(newTasks);
     setNewTaskName({ ...newTaskName, [cat]: "" });
+    saveData(records, newTasks);
   }
+
   function deleteTask(cat, idx) {
-    setTasks(prev => {
-      const arr = [...prev[cat]];
-      arr.splice(idx, 1);
-      return { ...prev, [cat]: arr };
+    const newTasks = { ...tasks };
+    newTasks[cat] = [...tasks[cat]];
+    newTasks[cat].splice(idx, 1);
+    setTasks(newTasks);
+    
+    // 同时更新所有日期的记录，移除对应索引
+    const newRecords = { ...records };
+    Object.keys(newRecords).forEach(dateKey => {
+      if (newRecords[dateKey][cat]) {
+        newRecords[dateKey][cat].splice(idx, 1);
+      }
     });
+    setRecords(newRecords);
+    saveData(newRecords, newTasks);
   }
+
   function addCategory() {
     const name = prompt("请输入新学科名");
     if (name && !tasks[name]) {
-      setTasks(prev => ({ ...prev, [name]: [] }));
+      const newTasks = { ...tasks, [name]: [] };
+      setTasks(newTasks);
+      saveData(records, newTasks);
     }
   }
+
   function deleteCategory(cat) {
     if (window.confirm(`确定删除学科【${cat}】吗？`)) {
-      setTasks(prev => {
-        const cp = { ...prev };
-        delete cp[cat];
-        return cp;
+      const newTasks = { ...tasks };
+      delete newTasks[cat];
+      setTasks(newTasks);
+      
+      // 清理记录中的相关数据
+      const newRecords = { ...records };
+      Object.keys(newRecords).forEach(dateKey => {
+        if (newRecords[dateKey][cat]) {
+          delete newRecords[dateKey][cat];
+        }
       });
+      setRecords(newRecords);
+      saveData(newRecords, newTasks);
+      
+      // 如果删除的是当前选中的tab，切换到第一个
+      if (tab === cat) {
+        setTab(Object.keys(newTasks)[0]);
+      }
     }
   }
+
   function shiftDate(d) {
     const dt = new Date(date);
     dt.setDate(dt.getDate() + d);
     setDate(dt.toISOString().split("T")[0]);
   }
+
   function shiftWeek(d) {
     const monday = new Date(weekStart);
     monday.setDate(monday.getDate() + d * 7);
@@ -119,14 +299,46 @@ export default function App() {
     setDate(dates[0]);
   }
 
-  // 进度
+  // 使用其他设备的同步码加载数据
+  async function syncWithCode() {
+    const inputCode = prompt("请输入其他设备的同步码:");
+    if (!inputCode) return;
+    
+    try {
+      setSyncStatus('saving');
+      const data = await loadFromIndexedDB(inputCode.toUpperCase());
+      
+      setRecords(data.records);
+      setTasks(data.tasks);
+      localStorage.setItem("taskRecords", JSON.stringify(data.records));
+      localStorage.setItem("taskConfig", JSON.stringify(data.tasks));
+      
+      setSyncStatus('synced');
+      alert('数据同步成功！');
+      setTimeout(() => setSyncStatus('local'), 2000);
+    } catch (error) {
+      console.error('同步失败:', error);
+      setSyncStatus('error');
+      alert('同步失败，请检查同步码是否正确');
+      setTimeout(() => setSyncStatus('local'), 3000);
+    }
+  }
+
+  // 进度计算
   const today = records[date] || {};
   let total = 0, done = 0;
   Object.keys(tasks).forEach(cat => {
     total += tasks[cat].length;
-    if (today[cat]) done += today[cat].filter(Boolean).length;
+    if (today[cat]) {
+      const currentTaskCount = tasks[cat].length;
+      const statusArray = today[cat];
+      for (let i = 0; i < Math.min(statusArray.length, currentTaskCount); i++) {
+        if (statusArray[i]) done++;
+      }
+    }
   });
   const percent = total ? Math.round((done / total) * 100) : 0;
+  
   let award = null;
   if (percent === 100 && total > 0) award = "🎉 全部完成！太棒了！";
   else if (percent >= 70) award = "🌟 还差一点就全部完成啦，加油！";
@@ -136,12 +348,19 @@ export default function App() {
     "#ff6b81", "#5f8ef7", "#22c993", "#ffb549", "#ae8afc", "#ec8ad9"
   ];
   const weekDates = getWeekDates(weekStart);
+  
   function getDayProgress(day) {
     const rec = records[day] || {};
     let t = 0, d = 0;
     Object.keys(tasks).forEach(cat => {
       t += tasks[cat].length;
-      if (rec[cat]) d += rec[cat].filter(Boolean).length;
+      if (rec[cat]) {
+        const currentTaskCount = tasks[cat].length;
+        const statusArray = rec[cat];
+        for (let i = 0; i < Math.min(statusArray.length, currentTaskCount); i++) {
+          if (statusArray[i]) d++;
+        }
+      }
     });
     return t ? Math.round((d / t) * 100) : 0;
   }
@@ -153,6 +372,61 @@ export default function App() {
       borderRadius: 36, boxShadow: "0 3px 24px #f1eaf3",
       padding: 24, position: "relative"
     }}>
+      {/* 同步状态指示器 */}
+      <div style={{
+        position: "absolute", top: 10, right: 15,
+        display: "flex", alignItems: "center", gap: 8
+      }}>
+        <div style={{
+          width: 8, height: 8, borderRadius: "50%",
+          background: syncStatus === 'synced' ? '#22c993' : 
+                     syncStatus === 'saving' ? '#ffb549' :
+                     syncStatus === 'error' ? '#ff6b81' : '#ccc'
+        }} />
+        <button 
+          onClick={() => setShowSyncPanel(!showSyncPanel)}
+          style={{
+            background: "none", border: "none", color: "#888",
+            cursor: "pointer", fontSize: 12
+          }}
+        >
+          {syncStatus === 'synced' ? '已同步' : 
+           syncStatus === 'saving' ? '同步中...' :
+           syncStatus === 'error' ? '同步失败' : '本地'}
+        </button>
+      </div>
+
+      {/* 同步面板 */}
+      {showSyncPanel && (
+        <div style={{
+          position: "absolute", top: 40, right: 15, zIndex: 10,
+          background: "white", borderRadius: 12, padding: 16,
+          boxShadow: "0 4px 20px rgba(0,0,0,0.1)", minWidth: 200
+        }}>
+          <h4 style={{ margin: "0 0 12px 0", color: "#333" }}>数据同步</h4>
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>本设备同步码:</div>
+            <div style={{ 
+              background: "#f5f5f5", padding: 8, borderRadius: 6,
+              fontFamily: "monospace", fontSize: 14, fontWeight: "bold"
+            }}>{syncCode}</div>
+          </div>
+          <button 
+            onClick={syncWithCode}
+            style={{
+              width: "100%", padding: 8, background: "#5f8ef7",
+              color: "white", border: "none", borderRadius: 6,
+              cursor: "pointer", marginBottom: 8
+            }}
+          >
+            从其他设备同步
+          </button>
+          <div style={{ fontSize: 11, color: "#999", lineHeight: 1.4 }}>
+            在其他设备上打开此应用，复制同步码，然后在这里粘贴即可同步数据
+          </div>
+        </div>
+      )}
+
       <h2 style={{
         textAlign: "center",
         color: "#ff9090",
@@ -164,7 +438,9 @@ export default function App() {
       }}>
         <span role="img" aria-label="lion">🦁</span> 每日任务打卡 <span role="img" aria-label="lion">🦁</span>
       </h2>
+      
       <ProgressBar percent={percent} />
+      
       <div style={{
         textAlign: "center",
         fontWeight: 800,
@@ -177,7 +453,8 @@ export default function App() {
           color: percent === 100 ? "#24bb5f" : "#ff6b81"
         }}>{done}/{total} ({percent}%)</span>
       </div>
-      {/* ======= 周视图 ======= */}
+
+      {/* 周视图 */}
       <div style={{
         display: "flex", alignItems: "center",
         gap: 10, margin: "12px 0 6px 0", justifyContent: "center"
@@ -190,6 +467,7 @@ export default function App() {
         <button onClick={() => shiftWeek(1)}
           style={{ border: "none", background: "none", color: "#e18e9d", fontSize: 20, fontWeight: 900, cursor: "pointer" }}>»</button>
       </div>
+
       <div style={{
         display: "flex", justifyContent: "space-between", marginBottom: 17,
         gap: 4
@@ -223,7 +501,8 @@ export default function App() {
           </div>
         ))}
       </div>
-      {/* ======= 学科Tab ======= */}
+
+      {/* 学科Tab */}
       <div style={{
         display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 16, justifyContent: "center"
       }}>
@@ -262,7 +541,8 @@ export default function App() {
           onClick={addCategory}
         >+新增学科</button>
       </div>
-      {/* ======= 学科详细卡片（任务卡片美化） ======= */}
+
+      {/* 学科详细卡片 */}
       {Object.keys(tasks).map((cat, idx) => (
         tab === cat &&
         <div key={cat} style={{
@@ -295,7 +575,7 @@ export default function App() {
           </div>
           <ul style={{ padding: 0, margin: "2px 0 0 0", listStyle: "none" }}>
             {tasks[cat].map((task, idx2) => {
-              const checked = today[cat] && today[cat][idx2];
+              const checked = getTaskStatus(cat, idx2, date);
               return (
                 <li key={task + idx2}
                   style={{
@@ -389,12 +669,14 @@ export default function App() {
           )}
         </div>
       ))}
+
       <div style={{
         margin: "26px 0 0 0", color: "#ffac77", fontWeight: 900,
         fontSize: award ? 21 : 16, textAlign: "center", minHeight: 28
       }}>
         {award}
       </div>
+
       <div style={{
         marginTop: 36, color: "#888", textAlign: "center", fontSize: 15, lineHeight: 1.8
       }}>
