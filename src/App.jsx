@@ -52,7 +52,8 @@ function ProgressBar({ percent }) {
 
 export default function App() {
   const [date, setDate] = useState(getToday());
-  const [tasks, setTasks] = useState(DEFAULT_TASKS);
+  // 改为每日独立的任务配置
+  const [dailyTasks, setDailyTasks] = useState({});
   const [records, setRecords] = useState({});
   const [editMode, setEditMode] = useState(false);
   const [newTaskName, setNewTaskName] = useState({});
@@ -64,6 +65,9 @@ export default function App() {
   const [syncCode, setSyncCode] = useState('');
   const [showSyncPanel, setShowSyncPanel] = useState(false);
 
+  // 获取当前日期的任务配置
+  const tasks = dailyTasks[date] || DEFAULT_TASKS;
+
   // 初始化数据
   useEffect(() => {
     loadLocalData();
@@ -74,13 +78,13 @@ export default function App() {
   function loadLocalData() {
     try {
       const localRecords = localStorage.getItem("taskRecords");
-      const localTasks = localStorage.getItem("taskConfig");
+      const localDailyTasks = localStorage.getItem("dailyTasksConfig");
       
       if (localRecords) {
         setRecords(JSON.parse(localRecords));
       }
-      if (localTasks) {
-        setTasks(JSON.parse(localTasks));
+      if (localDailyTasks) {
+        setDailyTasks(JSON.parse(localDailyTasks));
       }
     } catch (error) {
       console.error('加载本地数据失败:', error);
@@ -98,23 +102,23 @@ export default function App() {
   }
 
   // 保存数据到本地和云端
-  function saveData(newRecords, newTasks = tasks) {
+  function saveData(newRecords = records, newDailyTasks = dailyTasks) {
     // 保存到本地
     localStorage.setItem("taskRecords", JSON.stringify(newRecords));
-    localStorage.setItem("taskConfig", JSON.stringify(newTasks));
+    localStorage.setItem("dailyTasksConfig", JSON.stringify(newDailyTasks));
     
     // 尝试同步到云端（简化版，使用浏览器的 IndexedDB 模拟）
-    syncToCloud(newRecords, newTasks);
+    syncToCloud(newRecords, newDailyTasks);
   }
 
   // 云端同步（简化实现）
-  async function syncToCloud(recordsData, tasksData) {
+  async function syncToCloud(recordsData, dailyTasksData) {
     setSyncStatus('saving');
     try {
       // 这里使用 IndexedDB 模拟云端存储
       const data = {
         records: recordsData,
-        tasks: tasksData,
+        dailyTasks: dailyTasksData,
         lastUpdate: new Date().toISOString()
       };
       
@@ -227,60 +231,83 @@ export default function App() {
 
   function addTask(cat) {
     if (!newTaskName[cat] || !newTaskName[cat].trim()) return;
-    const newTasks = {
-      ...tasks,
-      [cat]: [...tasks[cat], newTaskName[cat].trim()]
+    
+    // 只为当前日期添加任务
+    const newDailyTasks = {
+      ...dailyTasks,
+      [date]: {
+        ...tasks,
+        [cat]: [...(tasks[cat] || []), newTaskName[cat].trim()]
+      }
     };
-    setTasks(newTasks);
+    
+    setDailyTasks(newDailyTasks);
     setNewTaskName({ ...newTaskName, [cat]: "" });
-    saveData(records, newTasks);
+    saveData(records, newDailyTasks);
   }
 
   function deleteTask(cat, idx) {
-    const newTasks = { ...tasks };
-    newTasks[cat] = [...tasks[cat]];
-    newTasks[cat].splice(idx, 1);
-    setTasks(newTasks);
-    
-    // 同时更新所有日期的记录，移除对应索引
-    const newRecords = { ...records };
-    Object.keys(newRecords).forEach(dateKey => {
-      if (newRecords[dateKey][cat]) {
-        newRecords[dateKey][cat].splice(idx, 1);
+    // 只从当前日期删除任务
+    const newDailyTasks = {
+      ...dailyTasks,
+      [date]: {
+        ...tasks,
+        [cat]: tasks[cat].filter((_, index) => index !== idx)
       }
-    });
-    setRecords(newRecords);
-    saveData(newRecords, newTasks);
+    };
+    
+    setDailyTasks(newDailyTasks);
+    
+    // 同时更新当前日期的记录，移除对应索引
+    const newRecords = { ...records };
+    if (newRecords[date] && newRecords[date][cat]) {
+      newRecords[date][cat].splice(idx, 1);
+      setRecords(newRecords);
+    }
+    
+    saveData(newRecords, newDailyTasks);
   }
 
   function addCategory() {
     const name = prompt("请输入新学科名");
     if (name && !tasks[name]) {
-      const newTasks = { ...tasks, [name]: [] };
-      setTasks(newTasks);
-      saveData(records, newTasks);
+      // 只为当前日期添加新学科
+      const newDailyTasks = {
+        ...dailyTasks,
+        [date]: { ...tasks, [name]: [] }
+      };
+      setDailyTasks(newDailyTasks);
+      saveData(records, newDailyTasks);
     }
   }
 
   function deleteCategory(cat) {
     if (window.confirm(`确定删除学科【${cat}】吗？`)) {
+      // 只从当前日期删除学科
       const newTasks = { ...tasks };
       delete newTasks[cat];
-      setTasks(newTasks);
       
-      // 清理记录中的相关数据
+      const newDailyTasks = {
+        ...dailyTasks,
+        [date]: newTasks
+      };
+      setDailyTasks(newDailyTasks);
+      
+      // 清理当前日期记录中的相关数据
       const newRecords = { ...records };
-      Object.keys(newRecords).forEach(dateKey => {
-        if (newRecords[dateKey][cat]) {
-          delete newRecords[dateKey][cat];
-        }
-      });
-      setRecords(newRecords);
-      saveData(newRecords, newTasks);
+      if (newRecords[date] && newRecords[date][cat]) {
+        delete newRecords[date][cat];
+        setRecords(newRecords);
+      }
+      
+      saveData(newRecords, newDailyTasks);
       
       // 如果删除的是当前选中的tab，切换到第一个
       if (tab === cat) {
-        setTab(Object.keys(newTasks)[0]);
+        const remainingTabs = Object.keys(newTasks);
+        if (remainingTabs.length > 0) {
+          setTab(remainingTabs[0]);
+        }
       }
     }
   }
@@ -309,9 +336,9 @@ export default function App() {
       const data = await loadFromIndexedDB(inputCode.toUpperCase());
       
       setRecords(data.records);
-      setTasks(data.tasks);
+      setDailyTasks(data.dailyTasks || {});
       localStorage.setItem("taskRecords", JSON.stringify(data.records));
-      localStorage.setItem("taskConfig", JSON.stringify(data.tasks));
+      localStorage.setItem("dailyTasksConfig", JSON.stringify(data.dailyTasks || {}));
       
       setSyncStatus('synced');
       alert('数据同步成功！');
@@ -351,11 +378,12 @@ export default function App() {
   
   function getDayProgress(day) {
     const rec = records[day] || {};
+    const dayTasks = dailyTasks[day] || DEFAULT_TASKS;
     let t = 0, d = 0;
-    Object.keys(tasks).forEach(cat => {
-      t += tasks[cat].length;
+    Object.keys(dayTasks).forEach(cat => {
+      t += dayTasks[cat].length;
       if (rec[cat]) {
-        const currentTaskCount = tasks[cat].length;
+        const currentTaskCount = dayTasks[cat].length;
         const statusArray = rec[cat];
         for (let i = 0; i < Math.min(statusArray.length, currentTaskCount); i++) {
           if (statusArray[i]) d++;
