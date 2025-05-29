@@ -5,7 +5,7 @@ import { VitePWA } from 'vite-plugin-pwa'
 export default defineConfig({
   plugins: [
     react(),
-    VitePWA({
+    //VitePWA({//
       registerType: 'autoUpdate',
       manifest: {
         name: '小学生每日打卡任务表',
