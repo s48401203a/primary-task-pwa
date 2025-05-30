@@ -86,6 +86,32 @@ function formatDate(dateStr) {
   return `${month}月${day}日 周${weekDay}`;
 }
 
+// 数据压缩和解压缩函数
+function compressData(data) {
+  try {
+    const jsonStr = JSON.stringify(data);
+    // 简单的压缩：转为 base64
+    return btoa(encodeURIComponent(jsonStr).replace(/%([0-9A-F]{2})/g, (match, p1) => 
+      String.fromCharCode('0x' + p1)
+    ));
+  } catch (e) {
+    console.error('压缩数据失败:', e);
+    return null;
+  }
+}
+
+function decompressData(compressed) {
+  try {
+    const jsonStr = decodeURIComponent(atob(compressed).split('').map(c => 
+      '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)
+    ).join(''));
+    return JSON.parse(jsonStr);
+  } catch (e) {
+    console.error('解压数据失败:', e);
+    return null;
+  }
+}
+
 function ProgressBar({ percent }) {
   return (
     <div style={{
@@ -188,7 +214,6 @@ export default function App() {
   const [tab, setTab] = useState(Object.keys(DEFAULT_TASKS)[0]);
   const [weekStart, setWeekStart] = useState(getWeekDates(getToday())[0]);
   const [syncStatus, setSyncStatus] = useState('local');
-  const [syncCode, setSyncCode] = useState('');
   const [showSyncPanel, setShowSyncPanel] = useState(false);
   const [viewMode, setViewMode] = useState('week'); // week, month, year
   const [showBadges, setShowBadges] = useState(false);
@@ -200,12 +225,17 @@ export default function App() {
   // 初始化数据
   useEffect(() => {
     loadLocalData();
-    const code = localStorage.getItem("userSyncCode") || generateSyncCode();
-    localStorage.setItem("userSyncCode", code);
-    setSyncCode(code);
+    
+    // 检查 URL 参数中是否有同步数据
+    const urlParams = new URLSearchParams(window.location.search);
+    const syncData = urlParams.get('sync');
+    
+    if (syncData) {
+      handleImportFromURL(syncData);
+    }
   }, []);
 
-  // 自动保存和同步
+  // 自动保存
   useEffect(() => {
     const timer = setTimeout(() => {
       if (Object.keys(records).length > 0 || Object.keys(dailyTasks).length > 0) {
@@ -213,16 +243,12 @@ export default function App() {
       }
     }, 1000);
     return () => clearTimeout(timer);
-  }, [records, dailyTasks]);
+  }, [records, dailyTasks, earnedBadges]);
 
   // 检查并更新获得的徽章
   useEffect(() => {
     checkBadges();
   }, [records, dailyTasks]);
-
-  function generateSyncCode() {
-    return Math.random().toString(36).substring(2, 8).toUpperCase();
-  }
 
   function loadLocalData() {
     try {
@@ -245,95 +271,133 @@ export default function App() {
     }
   }
 
-  function saveData(newRecords = records, newDailyTasks = dailyTasks) {
+  function saveData() {
     try {
-      localStorage.setItem("taskRecords", JSON.stringify(newRecords));
-      localStorage.setItem("dailyTasksConfig", JSON.stringify(newDailyTasks));
+      localStorage.setItem("taskRecords", JSON.stringify(records));
+      localStorage.setItem("dailyTasksConfig", JSON.stringify(dailyTasks));
       localStorage.setItem("earnedBadges", JSON.stringify(earnedBadges));
-      syncToCloud(newRecords, newDailyTasks);
     } catch (error) {
       console.error('保存数据失败:', error);
       setSyncStatus('error');
     }
   }
 
-  async function syncToCloud(recordsData, dailyTasksData) {
-    setSyncStatus('saving');
+  // 从 URL 导入数据
+  function handleImportFromURL(syncData) {
     try {
-      const data = {
-        records: recordsData,
-        dailyTasks: dailyTasksData,
-        earnedBadges: earnedBadges,
-        lastUpdate: new Date().toISOString(),
-        syncCode: syncCode
-      };
+      const data = decompressData(syncData);
+      if (!data) {
+        throw new Error('数据解析失败');
+      }
       
-      await saveToIndexedDB(syncCode, data);
-      setSyncStatus('synced');
-      setTimeout(() => setSyncStatus('local'), 2000);
+      const { records: newRecords, dailyTasks: newDailyTasks, earnedBadges: newBadges } = data;
+      
+      if (window.confirm('检测到同步数据，是否导入？这将覆盖当前数据。')) {
+        setRecords(newRecords || {});
+        setDailyTasks(newDailyTasks || {});
+        setEarnedBadges(newBadges || []);
+        
+        // 保存到本地
+        localStorage.setItem("taskRecords", JSON.stringify(newRecords || {}));
+        localStorage.setItem("dailyTasksConfig", JSON.stringify(newDailyTasks || {}));
+        localStorage.setItem("earnedBadges", JSON.stringify(newBadges || []));
+        
+        // 清除 URL 参数
+        window.history.replaceState({}, document.title, window.location.pathname);
+        
+        alert('数据导入成功！');
+      }
     } catch (error) {
-      console.error('同步失败:', error);
-      setSyncStatus('error');
-      setTimeout(() => setSyncStatus('local'), 3000);
+      console.error('导入数据失败:', error);
+      alert('导入数据失败，请检查链接是否正确');
     }
   }
 
-  function saveToIndexedDB(code, data) {
-    return new Promise((resolve, reject) => {
-      const request = indexedDB.open('TaskSync', 2);
-      
-      request.onerror = () => reject(request.error);
-      
-      request.onupgradeneeded = (event) => {
-        const db = event.target.result;
-        if (!db.objectStoreNames.contains('tasks')) {
-          db.createObjectStore('tasks', { keyPath: 'code' });
-        }
+  // 生成分享链接
+  function generateShareLink() {
+    try {
+      const data = {
+        records,
+        dailyTasks,
+        earnedBadges,
+        lastUpdate: new Date().toISOString()
       };
       
-      request.onsuccess = (event) => {
-        const db = event.target.result;
-        const transaction = db.transaction(['tasks'], 'readwrite');
-        const store = transaction.objectStore('tasks');
-        
-        const putRequest = store.put({ code, ...data });
-        
-        putRequest.onsuccess = () => resolve();
-        putRequest.onerror = () => reject(putRequest.error);
-      };
-    });
+      const compressed = compressData(data);
+      if (!compressed) {
+        throw new Error('数据压缩失败');
+      }
+      
+      const baseUrl = window.location.origin + window.location.pathname;
+      const shareUrl = `${baseUrl}?sync=${compressed}`;
+      
+      return shareUrl;
+    } catch (error) {
+      console.error('生成分享链接失败:', error);
+      return null;
+    }
   }
 
-  function loadFromIndexedDB(code) {
-    return new Promise((resolve, reject) => {
-      const request = indexedDB.open('TaskSync', 2);
+  // 导出数据到文件
+  function exportToFile() {
+    try {
+      const data = {
+        records,
+        dailyTasks,
+        earnedBadges,
+        exportDate: new Date().toISOString()
+      };
       
-      request.onerror = () => reject(new Error('无法打开数据库'));
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `task-backup-${new Date().toISOString().split('T')[0]}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
       
-      request.onupgradeneeded = (event) => {
-        const db = event.target.result;
-        if (!db.objectStoreNames.contains('tasks')) {
-          db.createObjectStore('tasks', { keyPath: 'code' });
+      alert('数据已导出到文件');
+    } catch (error) {
+      console.error('导出失败:', error);
+      alert('导出失败');
+    }
+  }
+
+  // 从文件导入数据
+  function importFromFile() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json';
+    
+    input.onchange = (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        try {
+          const data = JSON.parse(event.target.result);
+          
+          if (window.confirm('确定要导入数据吗？这将覆盖当前数据。')) {
+            setRecords(data.records || {});
+            setDailyTasks(data.dailyTasks || {});
+            setEarnedBadges(data.earnedBadges || []);
+            
+            saveData();
+            alert('数据导入成功！');
+          }
+        } catch (error) {
+          console.error('导入失败:', error);
+          alert('导入失败，请检查文件格式');
         }
       };
       
-      request.onsuccess = (event) => {
-        const db = event.target.result;
-        const transaction = db.transaction(['tasks'], 'readonly');
-        const store = transaction.objectStore('tasks');
-        const getRequest = store.get(code);
-        
-        getRequest.onsuccess = () => {
-          if (getRequest.result) {
-            resolve(getRequest.result);
-          } else {
-            reject(new Error(`未找到同步码 ${code} 对应的数据`));
-          }
-        };
-        
-        getRequest.onerror = () => reject(new Error('读取数据失败'));
-      };
-    });
+      reader.readAsText(file);
+    };
+    
+    input.click();
   }
 
   // 检查徽章获得情况
@@ -514,52 +578,6 @@ export default function App() {
     const dates = getWeekDates(monday.toISOString().split("T")[0]);
     setWeekStart(dates[0]);
     setDate(dates[0]);
-  }
-
-  // 使用其他设备的同步码加载数据
-  async function syncWithCode() {
-    const inputCode = prompt("请输入其他设备的同步码:");
-    if (!inputCode || !inputCode.trim()) return;
-    
-    const targetCode = inputCode.trim().toUpperCase();
-    
-    try {
-      setSyncStatus('saving');
-      
-      const data = await loadFromIndexedDB(targetCode);
-      
-      if (!data.records && !data.dailyTasks) {
-        throw new Error('同步数据格式不正确');
-      }
-      
-      const newRecords = data.records || {};
-      const newDailyTasks = data.dailyTasks || {};
-      const newBadges = data.earnedBadges || [];
-      
-      setRecords(newRecords);
-      setDailyTasks(newDailyTasks);
-      setEarnedBadges(newBadges);
-      
-      // 更新本地同步码为目标同步码
-      localStorage.setItem("userSyncCode", targetCode);
-      setSyncCode(targetCode);
-      
-      localStorage.setItem("taskRecords", JSON.stringify(newRecords));
-      localStorage.setItem("dailyTasksConfig", JSON.stringify(newDailyTasks));
-      localStorage.setItem("earnedBadges", JSON.stringify(newBadges));
-      
-      setSyncStatus('synced');
-      alert(`数据同步成功！\n同步了 ${Object.keys(newRecords).length} 天的记录数据\n获得了 ${newBadges.length} 个徽章`);
-      setTimeout(() => setSyncStatus('local'), 2000);
-      
-      setShowSyncPanel(false);
-      
-    } catch (error) {
-      console.error('同步失败:', error);
-      setSyncStatus('error');
-      alert(`同步失败：${error.message}`);
-      setTimeout(() => setSyncStatus('local'), 3000);
-    }
   }
 
   // 获取单日统计
@@ -748,27 +766,16 @@ export default function App() {
         </div>
         
         {/* 同步状态 */}
-        <div style={{
-          display: "flex", alignItems: "center", gap: 8
-        }}>
-          <div style={{
-            width: 8, height: 8, borderRadius: "50%",
-            background: syncStatus === 'synced' ? '#22c993' : 
-                       syncStatus === 'saving' ? '#ffb549' :
-                       syncStatus === 'error' ? '#ff6b81' : '#ccc'
-          }} />
-          <button 
-            onClick={() => setShowSyncPanel(!showSyncPanel)}
-            style={{
-              background: "none", border: "none", color: "#888",
-              cursor: "pointer", fontSize: 12
-            }}
-          >
-            {syncStatus === 'synced' ? '已同步' : 
-             syncStatus === 'saving' ? '同步中...' :
-             syncStatus === 'error' ? '同步失败' : '本地'}
-          </button>
-        </div>
+        <button 
+          onClick={() => setShowSyncPanel(!showSyncPanel)}
+          style={{
+            background: "rgba(255,255,255,0.8)", border: "1px solid #ddd",
+            borderRadius: 12, padding: "6px 12px", cursor: "pointer",
+            fontSize: 12, color: "#666", fontWeight: 700
+          }}
+        >
+          📤 同步
+        </button>
       </div>
 
       {/* 荣誉墙 */}
@@ -1009,61 +1016,91 @@ export default function App() {
         <div style={{
           position: "absolute", top: 60, right: 15, zIndex: 10,
           background: "white", borderRadius: 12, padding: 16,
-          boxShadow: "0 4px 20px rgba(0,0,0,0.1)", minWidth: 220
+          boxShadow: "0 4px 20px rgba(0,0,0,0.1)", minWidth: 280
         }}>
           <h4 style={{ margin: "0 0 12px 0", color: "#333" }}>数据同步</h4>
-          <div style={{ marginBottom: 12 }}>
-            <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>本设备同步码:</div>
-            <div style={{ 
-              background: "#f5f5f5", padding: 8, borderRadius: 6,
-              fontFamily: "monospace", fontSize: 14, fontWeight: "bold",
-              cursor: "pointer", border: "1px solid #ddd"
-            }}
-            onClick={() => {
-              navigator.clipboard?.writeText(syncCode);
-              alert('同步码已复制到剪贴板！');
-            }}
-            title="点击复制"
-            >{syncCode}</div>
-            <div style={{ fontSize: 10, color: "#999", marginTop: 4 }}>
-              数据记录: {Object.keys(records).length} 天 | 
-              任务配置: {Object.keys(dailyTasks).length} 天
-            </div>
+          
+          <div style={{ marginBottom: 16 }}>
+            <button 
+              onClick={() => {
+                const shareLink = generateShareLink();
+                if (shareLink) {
+                  if (shareLink.length > 2000) {
+                    alert('数据量较大，建议使用文件导出方式');
+                    return;
+                  }
+                  navigator.clipboard?.writeText(shareLink);
+                  alert('分享链接已复制到剪贴板！\n\n在其他设备上打开此链接即可同步数据。');
+                }
+              }}
+              style={{
+                width: "100%", padding: 10, background: "#5f8ef7",
+                color: "white", border: "none", borderRadius: 8,
+                cursor: "pointer", marginBottom: 8, fontSize: 14,
+                fontWeight: 700
+              }}
+            >
+              📋 复制分享链接
+            </button>
+            
+            <button 
+              onClick={exportToFile}
+              style={{
+                width: "100%", padding: 10, background: "#22c993",
+                color: "white", border: "none", borderRadius: 8,
+                cursor: "pointer", marginBottom: 8, fontSize: 14,
+                fontWeight: 700
+              }}
+            >
+              💾 导出到文件
+            </button>
+            
+            <button 
+              onClick={importFromFile}
+              style={{
+                width: "100%", padding: 10, background: "#ffb549",
+                color: "white", border: "none", borderRadius: 8,
+                cursor: "pointer", marginBottom: 8, fontSize: 14,
+                fontWeight: 700
+              }}
+            >
+              📂 从文件导入
+            </button>
+            
+            <button 
+              onClick={() => {
+                if (window.confirm('确定要清空所有数据吗？此操作不可撤销！')) {
+                  localStorage.clear();
+                  setRecords({});
+                  setDailyTasks({});
+                  setEarnedBadges([]);
+                  alert('数据已清空');
+                  window.location.reload();
+                }
+              }}
+              style={{
+                width: "100%", padding: 8, background: "#ff6b81",
+                color: "white", border: "none", borderRadius: 8,
+                cursor: "pointer", fontSize: 13,
+                fontWeight: 700
+              }}
+            >
+              🗑 清空所有数据
+            </button>
           </div>
-          <button 
-            onClick={syncWithCode}
-            style={{
-              width: "100%", padding: 8, background: "#5f8ef7",
-              color: "white", border: "none", borderRadius: 6,
-              cursor: "pointer", marginBottom: 8,
-              opacity: syncStatus === 'saving' ? 0.6 : 1
-            }}
-            disabled={syncStatus === 'saving'}
-          >
-            {syncStatus === 'saving' ? '同步中...' : '从其他设备同步'}
-          </button>
-          <button 
-            onClick={() => {
-              if (window.confirm('确定要清空所有数据吗？此操作不可撤销！')) {
-                localStorage.clear();
-                setRecords({});
-                setDailyTasks({});
-                setEarnedBadges([]);
-                generateOrLoadSyncCode();
-                alert('数据已清空');
-                window.location.reload();
-              }
-            }}
-            style={{
-              width: "100%", padding: 6, background: "#ff6b81",
-              color: "white", border: "none", borderRadius: 6,
-              cursor: "pointer", marginBottom: 8, fontSize: 12
-            }}
-          >
-            清空所有数据
-          </button>
-          <div style={{ fontSize: 11, color: "#999", lineHeight: 1.4 }}>
-            点击同步码可复制。在其他设备输入此码即可同步数据。
+          
+          <div style={{ fontSize: 12, color: "#666", lineHeight: 1.6 }}>
+            <div style={{ marginBottom: 8 }}>
+              <strong>同步方式说明：</strong>
+            </div>
+            <div style={{ paddingLeft: 12 }}>
+              1. <strong>分享链接</strong>：适合数据量较小时使用<br/>
+              2. <strong>文件导出/导入</strong>：适合数据量较大或需要备份时使用
+            </div>
+            <div style={{ marginTop: 8, fontSize: 11, color: "#999" }}>
+              记录数: {Object.keys(records).length} 天 | 
+              任务数: {Object.keys(dailyTasks).length} 天
+            </div>
           </div>
         </div>
       )}
@@ -1325,7 +1362,7 @@ export default function App() {
               </ul>
             )}
             
-            {editMode && (
+            {(editMode || tasks[cat].length === 0) && (
               <div style={{ marginTop: 16, display: "flex", gap: 8 }}>
                 <input
                   style={{
