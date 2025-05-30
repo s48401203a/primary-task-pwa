@@ -412,26 +412,57 @@ export default function App() {
     setDate(dates[0]);
   }
 
+  // 使用其他设备的同步码加载数据
   async function syncWithCode() {
     const inputCode = prompt("请输入其他设备的同步码:");
-    if (!inputCode) return;
+    if (!inputCode || !inputCode.trim()) return;
+    
+    const targetCode = inputCode.trim().toUpperCase();
     
     try {
       setSyncStatus('saving');
-      const data = await loadFromIndexedDB(inputCode.toUpperCase());
+      console.log('开始同步，目标同步码:', targetCode);
       
-      setRecords(data.records || {});
-      setDailyTasks(data.dailyTasks || {});
-      localStorage.setItem("taskRecords", JSON.stringify(data.records || {}));
-      localStorage.setItem("dailyTasksConfig", JSON.stringify(data.dailyTasks || {}));
+      const data = await loadFromIndexedDB(targetCode);
+      console.log('同步数据获取成功:', data);
+      
+      // 验证数据格式
+      if (!data.records && !data.dailyTasks) {
+        throw new Error('同步数据格式不正确');
+      }
+      
+      const newRecords = data.records || {};
+      const newDailyTasks = data.dailyTasks || {};
+      
+      // 更新状态
+      setRecords(newRecords);
+      setDailyTasks(newDailyTasks);
+      
+      // 保存到本地存储
+      localStorage.setItem("taskRecords", JSON.stringify(newRecords));
+      localStorage.setItem("dailyTasksConfig", JSON.stringify(newDailyTasks));
       
       setSyncStatus('synced');
-      alert('数据同步成功！');
+      alert(`数据同步成功！\n同步了 ${Object.keys(newRecords).length} 天的记录数据`);
       setTimeout(() => setSyncStatus('local'), 2000);
+      
+      // 关闭同步面板
+      setShowSyncPanel(false);
+      
     } catch (error) {
       console.error('同步失败:', error);
       setSyncStatus('error');
-      alert('同步失败，请检查同步码是否正确');
+      
+      let errorMessage = '同步失败：';
+      if (error.message.includes('未找到')) {
+        errorMessage += `同步码 ${targetCode} 不存在，请检查是否输入正确`;
+      } else if (error.message.includes('数据库')) {
+        errorMessage += '数据库访问异常，请稍后重试';
+      } else {
+        errorMessage += error.message || '未知错误';
+      }
+      
+      alert(errorMessage);
       setTimeout(() => setSyncStatus('local'), 3000);
     }
   }
@@ -623,7 +654,16 @@ export default function App() {
             {syncStatus === 'saving' ? '同步中...' : '从其他设备同步'}
           </button>
           <button 
-            onClick={clearAllData}
+            onClick={() => {
+              if (window.confirm('确定要清空所有数据吗？此操作不可撤销！')) {
+                localStorage.clear();
+                setRecords({});
+                setDailyTasks({});
+                generateOrLoadSyncCode();
+                alert('数据已清空');
+                window.location.reload();
+              }
+            }}
             style={{
               width: "100%", padding: 6, background: "#ff6b81",
               color: "white", border: "none", borderRadius: 6,
