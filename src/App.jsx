@@ -28,6 +28,15 @@ function getWeekDates(dateStr) {
   return res;
 }
 
+// 格式化日期显示
+function formatDate(dateStr) {
+  const date = new Date(dateStr);
+  const month = date.getMonth() + 1;
+  const day = date.getDate();
+  const weekDay = ["日", "一", "二", "三", "四", "五", "六"][date.getDay()];
+  return `${month}月${day}日 周${weekDay}`;
+}
+
 function ProgressBar({ percent }) {
   return (
     <div style={{
@@ -50,20 +59,44 @@ function ProgressBar({ percent }) {
   );
 }
 
+// 统计卡片组件
+function StatsCard({ title, value, subtitle, color }) {
+  return (
+    <div style={{
+      background: `linear-gradient(135deg, ${color}20, ${color}10)`,
+      borderRadius: 16,
+      padding: "12px 16px",
+      textAlign: "center",
+      border: `1px solid ${color}30`,
+      flex: 1
+    }}>
+      <div style={{ fontSize: 20, fontWeight: 900, color, marginBottom: 4 }}>
+        {value}
+      </div>
+      <div style={{ fontSize: 12, color: "#666", fontWeight: 700 }}>
+        {title}
+      </div>
+      {subtitle && (
+        <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>
+          {subtitle}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function App() {
   const [date, setDate] = useState(getToday());
-  // 改为每日独立的任务配置
   const [dailyTasks, setDailyTasks] = useState({});
   const [records, setRecords] = useState({});
   const [editMode, setEditMode] = useState(false);
   const [newTaskName, setNewTaskName] = useState({});
   const [tab, setTab] = useState(Object.keys(DEFAULT_TASKS)[0]);
   const [weekStart, setWeekStart] = useState(getWeekDates(getToday())[0]);
-  const [syncStatus, setSyncStatus] = useState('local'); // local, saving, synced, error
-
-  // 数据同步相关状态
+  const [syncStatus, setSyncStatus] = useState('local');
   const [syncCode, setSyncCode] = useState('');
   const [showSyncPanel, setShowSyncPanel] = useState(false);
+  const [showStats, setShowStats] = useState(false);
 
   // 获取当前日期的任务配置
   const tasks = dailyTasks[date] || DEFAULT_TASKS;
@@ -74,7 +107,16 @@ export default function App() {
     generateOrLoadSyncCode();
   }, []);
 
-  // 加载本地数据
+  // 自动保存
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (Object.keys(records).length > 0 || Object.keys(dailyTasks).length > 0) {
+        saveData();
+      }
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [records, dailyTasks]);
+
   function loadLocalData() {
     try {
       const localRecords = localStorage.getItem("taskRecords");
@@ -88,10 +130,10 @@ export default function App() {
       }
     } catch (error) {
       console.error('加载本地数据失败:', error);
+      setSyncStatus('error');
     }
   }
 
-  // 生成或加载同步码
   function generateOrLoadSyncCode() {
     let code = localStorage.getItem("syncCode");
     if (!code) {
@@ -101,21 +143,20 @@ export default function App() {
     setSyncCode(code);
   }
 
-  // 保存数据到本地和云端
   function saveData(newRecords = records, newDailyTasks = dailyTasks) {
-    // 保存到本地
-    localStorage.setItem("taskRecords", JSON.stringify(newRecords));
-    localStorage.setItem("dailyTasksConfig", JSON.stringify(newDailyTasks));
-    
-    // 尝试同步到云端（简化版，使用浏览器的 IndexedDB 模拟）
-    syncToCloud(newRecords, newDailyTasks);
+    try {
+      localStorage.setItem("taskRecords", JSON.stringify(newRecords));
+      localStorage.setItem("dailyTasksConfig", JSON.stringify(newDailyTasks));
+      syncToCloud(newRecords, newDailyTasks);
+    } catch (error) {
+      console.error('保存数据失败:', error);
+      setSyncStatus('error');
+    }
   }
 
-  // 云端同步（简化实现）
   async function syncToCloud(recordsData, dailyTasksData) {
     setSyncStatus('saving');
     try {
-      // 这里使用 IndexedDB 模拟云端存储
       const data = {
         records: recordsData,
         dailyTasks: dailyTasksData,
@@ -132,70 +173,134 @@ export default function App() {
     }
   }
 
-  // IndexedDB 操作（模拟云端）
   function saveToIndexedDB(code, data) {
     return new Promise((resolve, reject) => {
-      const request = indexedDB.open('TaskSync', 1);
-      
-      request.onerror = () => reject(request.error);
-      
-      request.onupgradeneeded = (event) => {
-        const db = event.target.result;
-        if (!db.objectStoreNames.contains('tasks')) {
-          db.createObjectStore('tasks', { keyPath: 'code' });
-        }
-      };
-      
-      request.onsuccess = (event) => {
-        const db = event.target.result;
-        const transaction = db.transaction(['tasks'], 'readwrite');
-        const store = transaction.objectStore('tasks');
+      try {
+        const request = indexedDB.open('TaskSync', 1);
         
-        store.put({ code, ...data });
+        request.onerror = () => {
+          console.error('IndexedDB open error:', request.error);
+          reject(request.error);
+        };
         
-        transaction.oncomplete = () => resolve();
-        transaction.onerror = () => reject(transaction.error);
-      };
+        request.onupgradeneeded = (event) => {
+          try {
+            const db = event.target.result;
+            if (!db.objectStoreNames.contains('tasks')) {
+              db.createObjectStore('tasks', { keyPath: 'code' });
+            }
+          } catch (error) {
+            console.error('IndexedDB upgrade error:', error);
+            reject(error);
+          }
+        };
+        
+        request.onsuccess = (event) => {
+          try {
+            const db = event.target.result;
+            const transaction = db.transaction(['tasks'], 'readwrite');
+            const store = transaction.objectStore('tasks');
+            
+            const putRequest = store.put({ code, ...data });
+            
+            putRequest.onsuccess = () => resolve();
+            putRequest.onerror = () => {
+              console.error('IndexedDB put error:', putRequest.error);
+              reject(putRequest.error);
+            };
+            
+            transaction.onerror = () => {
+              console.error('IndexedDB transaction error:', transaction.error);
+              reject(transaction.error);
+            };
+          } catch (error) {
+            console.error('IndexedDB operation error:', error);
+            reject(error);
+          }
+        };
+      } catch (error) {
+        console.error('IndexedDB setup error:', error);
+        reject(error);
+      }
     });
   }
 
   function loadFromIndexedDB(code) {
     return new Promise((resolve, reject) => {
-      const request = indexedDB.open('TaskSync', 1);
-      
-      request.onerror = () => reject(request.error);
-      
-      request.onsuccess = (event) => {
-        const db = event.target.result;
-        const transaction = db.transaction(['tasks'], 'readonly');
-        const store = transaction.objectStore('tasks');
-        const getRequest = store.get(code);
+      try {
+        const request = indexedDB.open('TaskSync', 1);
         
-        getRequest.onsuccess = () => {
-          if (getRequest.result) {
-            resolve(getRequest.result);
-          } else {
-            reject(new Error('未找到数据'));
+        request.onerror = () => {
+          console.error('IndexedDB open error:', request.error);
+          reject(new Error('无法打开数据库'));
+        };
+        
+        request.onupgradeneeded = (event) => {
+          try {
+            const db = event.target.result;
+            if (!db.objectStoreNames.contains('tasks')) {
+              db.createObjectStore('tasks', { keyPath: 'code' });
+            }
+          } catch (error) {
+            console.error('IndexedDB upgrade error:', error);
+            reject(error);
           }
         };
         
-        getRequest.onerror = () => reject(getRequest.error);
-      };
+        request.onsuccess = (event) => {
+          try {
+            const db = event.target.result;
+            
+            // 检查对象存储是否存在
+            if (!db.objectStoreNames.contains('tasks')) {
+              reject(new Error('数据库结构异常，请重试'));
+              return;
+            }
+            
+            const transaction = db.transaction(['tasks'], 'readonly');
+            const store = transaction.objectStore('tasks');
+            const getRequest = store.get(code);
+            
+            getRequest.onsuccess = () => {
+              if (getRequest.result) {
+                console.log('找到同步数据:', getRequest.result);
+                resolve(getRequest.result);
+              } else {
+                console.log('未找到同步码对应的数据:', code);
+                reject(new Error(`未找到同步码 ${code} 对应的数据`));
+              }
+            };
+            
+            getRequest.onerror = () => {
+              console.error('IndexedDB get error:', getRequest.error);
+              reject(new Error('读取数据失败'));
+            };
+            
+            transaction.onerror = () => {
+              console.error('IndexedDB transaction error:', transaction.error);
+              reject(new Error('数据库操作失败'));
+            };
+          } catch (error) {
+            console.error('IndexedDB operation error:', error);
+            reject(new Error('数据库操作异常'));
+          }
+        };
+      } catch (error) {
+        console.error('IndexedDB setup error:', error);
+        reject(new Error('数据库初始化失败'));
+      }
     });
   }
 
-  // 修复：确保勾选状态数组长度正确
   function getTaskStatus(cat, taskIndex, dateStr) {
     const dayRecord = records[dateStr];
     if (!dayRecord || !dayRecord[cat]) {
       return false;
     }
     
-    // 确保数组长度与当前任务数量一致
     const currentTaskCount = tasks[cat] ? tasks[cat].length : 0;
     const statusArray = dayRecord[cat];
     
-    // 如果索引超出范围，返回 false
     if (taskIndex >= currentTaskCount || taskIndex >= statusArray.length) {
       return false;
     }
@@ -203,16 +308,13 @@ export default function App() {
     return statusArray[taskIndex] || false;
   }
 
-  // 修复：勾选任务时确保数组长度正确
   function toggleCheck(cat, idx) {
     setRecords(prev => {
       const day = { ...(prev[date] || {}) };
       const currentTaskCount = tasks[cat].length;
       
-      // 确保数组长度正确
       day[cat] = Array(currentTaskCount).fill(false);
       
-      // 复制已有的状态（如果存在）
       if (prev[date] && prev[date][cat]) {
         const oldStatus = prev[date][cat];
         for (let i = 0; i < Math.min(oldStatus.length, currentTaskCount); i++) {
@@ -220,11 +322,9 @@ export default function App() {
         }
       }
       
-      // 切换当前任务状态
       day[cat][idx] = !day[cat][idx];
       
       const newRecords = { ...prev, [date]: day };
-      saveData(newRecords);
       return newRecords;
     });
   }
@@ -232,7 +332,6 @@ export default function App() {
   function addTask(cat) {
     if (!newTaskName[cat] || !newTaskName[cat].trim()) return;
     
-    // 只为当前日期添加任务
     const newDailyTasks = {
       ...dailyTasks,
       [date]: {
@@ -243,11 +342,11 @@ export default function App() {
     
     setDailyTasks(newDailyTasks);
     setNewTaskName({ ...newTaskName, [cat]: "" });
-    saveData(records, newDailyTasks);
   }
 
   function deleteTask(cat, idx) {
-    // 只从当前日期删除任务
+    if (!window.confirm('确定删除这个任务吗？')) return;
+    
     const newDailyTasks = {
       ...dailyTasks,
       [date]: {
@@ -258,32 +357,29 @@ export default function App() {
     
     setDailyTasks(newDailyTasks);
     
-    // 同时更新当前日期的记录，移除对应索引
     const newRecords = { ...records };
     if (newRecords[date] && newRecords[date][cat]) {
       newRecords[date][cat].splice(idx, 1);
       setRecords(newRecords);
     }
-    
-    saveData(newRecords, newDailyTasks);
   }
 
   function addCategory() {
-    const name = prompt("请输入新学科名");
-    if (name && !tasks[name]) {
-      // 只为当前日期添加新学科
+    const name = prompt("请输入新学科名称");
+    if (name && name.trim() && !tasks[name.trim()]) {
       const newDailyTasks = {
         ...dailyTasks,
-        [date]: { ...tasks, [name]: [] }
+        [date]: { ...tasks, [name.trim()]: [] }
       };
       setDailyTasks(newDailyTasks);
-      saveData(records, newDailyTasks);
+      setTab(name.trim());
+    } else if (tasks[name?.trim()]) {
+      alert('该学科已存在！');
     }
   }
 
   function deleteCategory(cat) {
-    if (window.confirm(`确定删除学科【${cat}】吗？`)) {
-      // 只从当前日期删除学科
+    if (window.confirm(`确定删除学科【${cat}】吗？此操作不可撤销！`)) {
       const newTasks = { ...tasks };
       delete newTasks[cat];
       
@@ -293,16 +389,12 @@ export default function App() {
       };
       setDailyTasks(newDailyTasks);
       
-      // 清理当前日期记录中的相关数据
       const newRecords = { ...records };
       if (newRecords[date] && newRecords[date][cat]) {
         delete newRecords[date][cat];
         setRecords(newRecords);
       }
       
-      saveData(newRecords, newDailyTasks);
-      
-      // 如果删除的是当前选中的tab，切换到第一个
       if (tab === cat) {
         const remainingTabs = Object.keys(newTasks);
         if (remainingTabs.length > 0) {
@@ -310,12 +402,6 @@ export default function App() {
         }
       }
     }
-  }
-
-  function shiftDate(d) {
-    const dt = new Date(date);
-    dt.setDate(dt.getDate() + d);
-    setDate(dt.toISOString().split("T")[0]);
   }
 
   function shiftWeek(d) {
@@ -326,7 +412,6 @@ export default function App() {
     setDate(dates[0]);
   }
 
-  // 使用其他设备的同步码加载数据
   async function syncWithCode() {
     const inputCode = prompt("请输入其他设备的同步码:");
     if (!inputCode) return;
@@ -335,9 +420,9 @@ export default function App() {
       setSyncStatus('saving');
       const data = await loadFromIndexedDB(inputCode.toUpperCase());
       
-      setRecords(data.records);
+      setRecords(data.records || {});
       setDailyTasks(data.dailyTasks || {});
-      localStorage.setItem("taskRecords", JSON.stringify(data.records));
+      localStorage.setItem("taskRecords", JSON.stringify(data.records || {}));
       localStorage.setItem("dailyTasksConfig", JSON.stringify(data.dailyTasks || {}));
       
       setSyncStatus('synced');
@@ -349,6 +434,38 @@ export default function App() {
       alert('同步失败，请检查同步码是否正确');
       setTimeout(() => setSyncStatus('local'), 3000);
     }
+  }
+
+  // 统计数据计算
+  function getWeekStats() {
+    const weekDates = getWeekDates(weekStart);
+    let totalTasks = 0;
+    let completedTasks = 0;
+    let completeDays = 0;
+    
+    weekDates.forEach(day => {
+      const dayTasks = dailyTasks[day] || DEFAULT_TASKS;
+      const dayRecord = records[day] || {};
+      let dayTotal = 0;
+      let dayCompleted = 0;
+      
+      Object.keys(dayTasks).forEach(cat => {
+        dayTotal += dayTasks[cat].length;
+        if (dayRecord[cat]) {
+          const statusArray = dayRecord[cat];
+          const taskCount = dayTasks[cat].length;
+          for (let i = 0; i < Math.min(statusArray.length, taskCount); i++) {
+            if (statusArray[i]) dayCompleted++;
+          }
+        }
+      });
+      
+      totalTasks += dayTotal;
+      completedTasks += dayCompleted;
+      if (dayTotal > 0 && dayCompleted === dayTotal) completeDays++;
+    });
+    
+    return { totalTasks, completedTasks, completeDays };
   }
 
   // 进度计算
@@ -368,8 +485,9 @@ export default function App() {
   
   let award = null;
   if (percent === 100 && total > 0) award = "🎉 全部完成！太棒了！";
-  else if (percent >= 70) award = "🌟 还差一点就全部完成啦，加油！";
-  else if (done > 0) award = `已完成 ${done}/${total} 项，继续努力！`;
+  else if (percent >= 80) award = "🌟 还差一点就全部完成啦，加油！";
+  else if (percent >= 50) award = "💪 已经完成一半了，继续努力！";
+  else if (done > 0) award = `已完成 ${done}/${total} 项，继续加油！`;
 
   const tabColors = [
     "#ff6b81", "#5f8ef7", "#22c993", "#ffb549", "#ae8afc", "#ec8ad9"
@@ -393,64 +511,129 @@ export default function App() {
     return t ? Math.round((d / t) * 100) : 0;
   }
 
+  const weekStats = getWeekStats();
+
   return (
     <div style={{
-      maxWidth: 540, margin: "36px auto", minHeight: "100vh",
+      maxWidth: 540, margin: "20px auto", minHeight: "100vh",
       background: "linear-gradient(135deg,#fdf6fb 60%,#e5eafc 120%)",
-      borderRadius: 36, boxShadow: "0 3px 24px #f1eaf3",
-      padding: 24, position: "relative"
+      borderRadius: 24, boxShadow: "0 3px 24px #f1eaf3",
+      padding: 20, position: "relative"
     }}>
-      {/* 同步状态指示器 */}
+      {/* 顶部工具栏 */}
       <div style={{
-        position: "absolute", top: 10, right: 15,
-        display: "flex", alignItems: "center", gap: 8
+        display: "flex", justifyContent: "space-between", alignItems: "center",
+        marginBottom: 16
       }}>
-        <div style={{
-          width: 8, height: 8, borderRadius: "50%",
-          background: syncStatus === 'synced' ? '#22c993' : 
-                     syncStatus === 'saving' ? '#ffb549' :
-                     syncStatus === 'error' ? '#ff6b81' : '#ccc'
-        }} />
         <button 
-          onClick={() => setShowSyncPanel(!showSyncPanel)}
+          onClick={() => setShowStats(!showStats)}
           style={{
-            background: "none", border: "none", color: "#888",
-            cursor: "pointer", fontSize: 12
+            background: "rgba(255,255,255,0.8)", border: "1px solid #ddd",
+            borderRadius: 12, padding: "6px 12px", cursor: "pointer",
+            fontSize: 12, color: "#666"
           }}
         >
-          {syncStatus === 'synced' ? '已同步' : 
-           syncStatus === 'saving' ? '同步中...' :
-           syncStatus === 'error' ? '同步失败' : '本地'}
+          📊 统计
         </button>
+        
+        {/* 同步状态 */}
+        <div style={{
+          display: "flex", alignItems: "center", gap: 8
+        }}>
+          <div style={{
+            width: 8, height: 8, borderRadius: "50%",
+            background: syncStatus === 'synced' ? '#22c993' : 
+                       syncStatus === 'saving' ? '#ffb549' :
+                       syncStatus === 'error' ? '#ff6b81' : '#ccc'
+          }} />
+          <button 
+            onClick={() => setShowSyncPanel(!showSyncPanel)}
+            style={{
+              background: "none", border: "none", color: "#888",
+              cursor: "pointer", fontSize: 12
+            }}
+          >
+            {syncStatus === 'synced' ? '已同步' : 
+             syncStatus === 'saving' ? '同步中...' :
+             syncStatus === 'error' ? '同步失败' : '本地'}
+          </button>
+        </div>
       </div>
+
+      {/* 统计面板 */}
+      {showStats && (
+        <div style={{
+          background: "rgba(255,255,255,0.9)", borderRadius: 16,
+          padding: 16, marginBottom: 16, border: "1px solid #eee"
+        }}>
+          <h4 style={{ margin: "0 0 12px 0", color: "#333", textAlign: "center" }}>
+            本周统计 ({weekDates[0]} ~ {weekDates[6]})
+          </h4>
+          <div style={{ display: "flex", gap: 8 }}>
+            <StatsCard 
+              title="完成天数" 
+              value={weekStats.completeDays} 
+              subtitle="/ 7天"
+              color="#22c993" 
+            />
+            <StatsCard 
+              title="完成任务" 
+              value={weekStats.completedTasks} 
+              subtitle={`/ ${weekStats.totalTasks}项`}
+              color="#5f8ef7" 
+            />
+            <StatsCard 
+              title="完成率" 
+              value={`${weekStats.totalTasks ? Math.round((weekStats.completedTasks / weekStats.totalTasks) * 100) : 0}%`}
+              color="#ff6b81" 
+            />
+          </div>
+        </div>
+      )}
 
       {/* 同步面板 */}
       {showSyncPanel && (
         <div style={{
-          position: "absolute", top: 40, right: 15, zIndex: 10,
+          position: "absolute", top: 60, right: 15, zIndex: 10,
           background: "white", borderRadius: 12, padding: 16,
-          boxShadow: "0 4px 20px rgba(0,0,0,0.1)", minWidth: 200
+          boxShadow: "0 4px 20px rgba(0,0,0,0.1)", minWidth: 220
         }}>
           <h4 style={{ margin: "0 0 12px 0", color: "#333" }}>数据同步</h4>
           <div style={{ marginBottom: 12 }}>
             <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>本设备同步码:</div>
             <div style={{ 
               background: "#f5f5f5", padding: 8, borderRadius: 6,
-              fontFamily: "monospace", fontSize: 14, fontWeight: "bold"
-            }}>{syncCode}</div>
+              fontFamily: "monospace", fontSize: 14, fontWeight: "bold",
+              cursor: "pointer"
+            }}
+            onClick={() => navigator.clipboard?.writeText(syncCode)}
+            title="点击复制"
+            >{syncCode}</div>
           </div>
           <button 
             onClick={syncWithCode}
             style={{
               width: "100%", padding: 8, background: "#5f8ef7",
               color: "white", border: "none", borderRadius: 6,
-              cursor: "pointer", marginBottom: 8
+              cursor: "pointer", marginBottom: 8,
+              opacity: syncStatus === 'saving' ? 0.6 : 1
+            }}
+            disabled={syncStatus === 'saving'}
+          >
+            {syncStatus === 'saving' ? '同步中...' : '从其他设备同步'}
+          </button>
+          <button 
+            onClick={clearAllData}
+            style={{
+              width: "100%", padding: 6, background: "#ff6b81",
+              color: "white", border: "none", borderRadius: 6,
+              cursor: "pointer", marginBottom: 8, fontSize: 12
             }}
           >
-            从其他设备同步
+            清空所有数据
           </button>
           <div style={{ fontSize: 11, color: "#999", lineHeight: 1.4 }}>
-            在其他设备上打开此应用，复制同步码，然后在这里粘贴即可同步数据
+            点击同步码可复制。在其他设备输入此码即可同步数据。
           </div>
         </div>
       )}
@@ -459,13 +642,21 @@ export default function App() {
         textAlign: "center",
         color: "#ff9090",
         fontWeight: 900,
-        fontSize: 32,
+        fontSize: 28,
         marginBottom: 8,
         letterSpacing: 2,
         textShadow: "0 2px 12px #ffbcdb55"
       }}>
-        <span role="img" aria-label="lion">🦁</span> 每日任务打卡 <span role="img" aria-label="lion">🦁</span>
+        🦁 每日任务打卡 🦁
       </h2>
+      
+      {/* 当前日期显示 */}
+      <div style={{
+        textAlign: "center", fontSize: 16, color: "#666",
+        marginBottom: 12, fontWeight: 700
+      }}>
+        {formatDate(date)}
+      </div>
       
       <ProgressBar percent={percent} />
       
@@ -473,8 +664,8 @@ export default function App() {
         textAlign: "center",
         fontWeight: 800,
         color: percent === 100 ? "#24bb5f" : "#fc8591",
-        fontSize: 19,
-        marginBottom: 10,
+        fontSize: 18,
+        marginBottom: 16,
         textShadow: percent === 100 ? "0 1px 8px #baffce99" : "none"
       }}>
         完成进度：<span style={{
@@ -485,69 +676,87 @@ export default function App() {
       {/* 周视图 */}
       <div style={{
         display: "flex", alignItems: "center",
-        gap: 10, margin: "12px 0 6px 0", justifyContent: "center"
+        gap: 10, margin: "12px 0", justifyContent: "center"
       }}>
         <button onClick={() => shiftWeek(-1)}
           style={{ border: "none", background: "none", color: "#e18e9d", fontSize: 20, fontWeight: 900, cursor: "pointer" }}>«</button>
-        <span style={{ color: "#888", fontWeight: 800 }}>
-          {weekDates[0]} ~ {weekDates[6]}
+        <span style={{ color: "#888", fontWeight: 800, fontSize: 14 }}>
+          {weekDates[0].slice(5)} ~ {weekDates[6].slice(5)}
         </span>
         <button onClick={() => shiftWeek(1)}
           style={{ border: "none", background: "none", color: "#e18e9d", fontSize: 20, fontWeight: 900, cursor: "pointer" }}>»</button>
       </div>
 
       <div style={{
-        display: "flex", justifyContent: "space-between", marginBottom: 17,
-        gap: 4
+        display: "flex", justifyContent: "space-between", marginBottom: 16,
+        gap: 3
       }}>
-        {weekDates.map(day => (
-          <div key={day}
-            style={{
-              flex: 1,
-              background: day === date ? "linear-gradient(120deg,#fda2c6 60%,#a5dfff 120%)" : "#f8fafd",
-              borderRadius: 18,
-              margin: "0 2px", cursor: "pointer",
-              textAlign: "center", boxShadow: day === date ? "0 2px 12px #f0c6f4aa" : undefined,
-              border: day === date ? "2.2px solid #ff9eae" : "1.2px solid #eee",
-              fontWeight: 900, color: day === date ? "#fff" : "#ae8afc",
-              padding: "9px 0", transition: "all .2s"
-            }}
-            onClick={() => setDate(day)}
-          >
-            {["一","二","三","四","五","六","日"][new Date(day).getDay()===0?6:new Date(day).getDay()-1]}<br/>
-            <span style={{ fontSize: 15 }}>{day.slice(5)}</span>
-            <div style={{
-              height: 7, width: "83%", margin: "4px auto 0 auto",
-              background: "#e2e7fd", borderRadius: 3, overflow: "hidden"
-            }}>
+        {weekDates.map(day => {
+          const progress = getDayProgress(day);
+          const isToday = day === getToday();
+          const isSelected = day === date;
+          
+          return (
+            <div key={day}
+              style={{
+                flex: 1,
+                background: isSelected ? "linear-gradient(120deg,#fda2c6 60%,#a5dfff 120%)" : "#f8fafd",
+                borderRadius: 16,
+                margin: "0 1px", cursor: "pointer",
+                textAlign: "center", 
+                boxShadow: isSelected ? "0 2px 12px #f0c6f4aa" : undefined,
+                border: isSelected ? "2px solid #ff9eae" : isToday ? "2px solid #ffb549" : "1px solid #eee",
+                fontWeight: 900, 
+                color: isSelected ? "#fff" : isToday ? "#ff9549" : "#ae8afc",
+                padding: "8px 2px", 
+                transition: "all .2s",
+                position: "relative"
+              }}
+              onClick={() => setDate(day)}
+            >
+              {["一","二","三","四","五","六","日"][new Date(day).getDay()===0?6:new Date(day).getDay()-1]}
+              <br/>
+              <span style={{ fontSize: 13 }}>{day.slice(8)}</span>
+              {isToday && (
+                <div style={{
+                  position: "absolute", top: 2, right: 2,
+                  width: 6, height: 6, borderRadius: "50%",
+                  background: "#ffb549"
+                }} />
+              )}
               <div style={{
-                height: 7, width: `${getDayProgress(day)}%`,
-                background: getDayProgress(day) === 100 ? "#14d897" : "#ff80a9",
-                transition: "width .2s"
-              }} />
+                height: 6, width: "80%", margin: "3px auto 0 auto",
+                background: "#e2e7fd", borderRadius: 3, overflow: "hidden"
+              }}>
+                <div style={{
+                  height: 6, width: `${progress}%`,
+                  background: progress === 100 ? "#14d897" : "#ff80a9",
+                  transition: "width .2s"
+                }} />
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       {/* 学科Tab */}
       <div style={{
-        display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 16, justifyContent: "center"
+        display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 16, justifyContent: "center"
       }}>
         {Object.keys(tasks).map((cat, idx) => (
           <button
             key={cat}
             style={{
-              padding: "10px 22px",
-              borderRadius: 22,
+              padding: "8px 16px",
+              borderRadius: 20,
               border: "none",
               background: tab === cat ? tabColors[idx % tabColors.length] : "#f6f7fb",
               fontWeight: tab === cat ? 900 : 700,
               color: tab === cat ? "#fff" : "#8a8a8a",
               cursor: "pointer",
-              fontSize: 17,
+              fontSize: 15,
               boxShadow: tab === cat ? "0 2px 9px #ffb9e055" : undefined,
-              letterSpacing: 1
+              letterSpacing: 0.5
             }}
             onClick={() => setTab(cat)}
           >
@@ -557,160 +766,181 @@ export default function App() {
         <button
           style={{
             border: "2px dashed #fc8591",
-            borderRadius: 19,
-            padding: "8px 17px",
-            background: "#fff0",
+            borderRadius: 16,
+            padding: "6px 12px",
+            background: "transparent",
             color: "#fc8591",
             fontWeight: 700,
-            fontSize: 16,
-            marginLeft: 2,
+            fontSize: 14,
             cursor: "pointer"
           }}
           onClick={addCategory}
-        >+新增学科</button>
+        >+ 新增</button>
       </div>
 
       {/* 学科详细卡片 */}
       {Object.keys(tasks).map((cat, idx) => (
-        tab === cat &&
-        <div key={cat} style={{
-          background: "linear-gradient(135deg,#fffafd 60%,#f6f9ff)",
-          borderRadius: 23,
-          boxShadow: "0 4px 16px #efe0fc44",
-          padding: 22,
-          margin: "22px 0"
-        }}>
-          <div style={{
-            display: "flex", justifyContent: "space-between",
-            alignItems: "center", marginBottom: 12
+        tab === cat && (
+          <div key={cat} style={{
+            background: "linear-gradient(135deg,#fffafd 60%,#f6f9ff)",
+            borderRadius: 20,
+            boxShadow: "0 4px 16px #efe0fc44",
+            padding: 20,
+            margin: "20px 0"
           }}>
-            <span style={{
-              fontWeight: 900, fontSize: 22,
-              color: tabColors[idx % tabColors.length],
-              letterSpacing: 1
-            }}>{cat}</span>
-            <div>
-              <button
-                style={{ color: "#fc8591", marginRight: 13, background: "#fff0", border: "none", cursor: "pointer", fontSize: 18 }}
-                onClick={() => deleteCategory(cat)}
-                title="删除学科"
-              >🗑</button>
-              <button
-                style={{ color: "#888", background: "#fff0", border: "none", cursor: "pointer", fontWeight: 700, fontSize: 16 }}
-                onClick={() => setEditMode(e => !e)}
-              >{editMode ? "完成编辑" : "编辑"}</button>
+            <div style={{
+              display: "flex", justifyContent: "space-between",
+              alignItems: "center", marginBottom: 16
+            }}>
+              <span style={{
+                fontWeight: 900, fontSize: 20,
+                color: tabColors[idx % tabColors.length],
+                letterSpacing: 1
+              }}>{cat}</span>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button
+                  style={{ 
+                    color: "#fc8591", background: "transparent", border: "none", 
+                    cursor: "pointer", fontSize: 16, padding: 4
+                  }}
+                  onClick={() => deleteCategory(cat)}
+                  title="删除学科"
+                >🗑</button>
+                <button
+                  style={{ 
+                    color: "#888", background: "transparent", border: "1px solid #ddd",
+                    borderRadius: 8, padding: "4px 8px", cursor: "pointer", 
+                    fontWeight: 700, fontSize: 12
+                  }}
+                  onClick={() => setEditMode(!editMode)}
+                >{editMode ? "完成" : "编辑"}</button>
+              </div>
             </div>
-          </div>
-          <ul style={{ padding: 0, margin: "2px 0 0 0", listStyle: "none" }}>
-            {tasks[cat].map((task, idx2) => {
-              const checked = getTaskStatus(cat, idx2, date);
-              return (
-                <li key={task + idx2}
+            
+            {tasks[cat].length === 0 ? (
+              <div style={{
+                textAlign: "center", color: "#999", padding: "20px 0",
+                fontStyle: "italic"
+              }}>
+                暂无任务，点击下方添加任务
+              </div>
+            ) : (
+              <ul style={{ padding: 0, margin: 0, listStyle: "none" }}>
+                {tasks[cat].map((task, idx2) => {
+                  const checked = getTaskStatus(cat, idx2, date);
+                  return (
+                    <li key={`${task}-${idx2}`}
+                      style={{
+                        display: "flex", alignItems: "center",
+                        borderRadius: 16,
+                        background: checked
+                          ? "linear-gradient(90deg, #d1ffe6 65%, #b6f3fa 120%)"
+                          : "linear-gradient(90deg, #fff 65%, #f4f5fd 110%)",
+                        boxShadow: checked
+                          ? "0 2px 12px #a0fdd4b2"
+                          : "0 2px 8px #e9e2fd80",
+                        padding: "12px 16px",
+                        margin: "12px 0",
+                        fontSize: 16,
+                        fontWeight: 700,
+                        color: checked ? "#149b74" : "#4d476a",
+                        transition: "background .18s, box-shadow .18s"
+                      }}>
+                      <label style={{
+                        display: "flex", alignItems: "center", width: "100%", cursor: "pointer", fontWeight: 800
+                      }}>
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => toggleCheck(cat, idx2)}
+                          style={{
+                            width: 24, height: 24, marginRight: 12, accentColor: checked ? "#21bfa0" : "#eeaed2",
+                            transition: "accent-color .3s"
+                          }}
+                        />
+                        <span style={{
+                          flex: 1, fontSize: 16,
+                          color: checked ? "#16a072" : "#695a82",
+                          textDecoration: checked ? "line-through" : "none",
+                          fontWeight: checked ? 800 : 700,
+                          letterSpacing: 1,
+                          transition: "color .22s"
+                        }}>
+                          {task}
+                        </span>
+                      </label>
+                      {checked && (
+                        <span style={{
+                          marginLeft: 12,
+                          color: "#21bf8f", fontWeight: 900, fontSize: 20
+                        }}>✓</span>
+                      )}
+                      {editMode && (
+                        <button
+                          style={{
+                            color: "#f8638e", background: "transparent",
+                            border: "none", marginLeft: 12, cursor: "pointer", fontSize: 14,
+                            padding: 4
+                          }}
+                          onClick={() => deleteTask(cat, idx2)}
+                        >删除</button>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+            
+            {editMode && (
+              <div style={{ marginTop: 16, display: "flex", gap: 8 }}>
+                <input
                   style={{
-                    display: "flex", alignItems: "center",
-                    borderRadius: 20,
-                    background: checked
-                      ? "linear-gradient(90deg, #d1ffe6 65%, #b6f3fa 120%)"
-                      : "linear-gradient(90deg, #fff 65%, #f4f5fd 110%)",
-                    boxShadow: checked
-                      ? "0 2px 12px #a0fdd4b2"
-                      : "0 3px 10px #e9e2fd80",
-                    padding: "14px 20px 14px 15px",
-                    margin: "17px 0",
-                    fontSize: 19,
+                    flex: 1,
+                    borderRadius: 12,
+                    border: "1.5px solid #fc8591",
+                    padding: "8px 12px",
+                    fontSize: 14,
+                    outline: "none"
+                  }}
+                  value={newTaskName[cat] || ""}
+                  placeholder="输入新任务名称"
+                  onChange={e => setNewTaskName({ ...newTaskName, [cat]: e.target.value })}
+                  onKeyPress={e => e.key === 'Enter' && addTask(cat)}
+                />
+                <button
+                  onClick={() => addTask(cat)}
+                  style={{
+                    background: "#fc8591",
+                    color: "#fff",
+                    border: "none",
+                    borderRadius: 12,
+                    padding: "8px 16px",
                     fontWeight: 800,
-                    color: checked ? "#149b74" : "#4d476a",
-                    transition: "background .18s, box-shadow .18s"
-                  }}>
-                  <label style={{
-                    display: "flex", alignItems: "center", width: "100%", cursor: "pointer", fontWeight: 900
-                  }}>
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      onChange={() => toggleCheck(cat, idx2)}
-                      style={{
-                        width: 28, height: 28, marginRight: 16, accentColor: checked ? "#21bfa0" : "#eeaed2",
-                        transition: "accent-color .3s"
-                      }}
-                    />
-                    <span style={{
-                      flex: 1, fontSize: 20,
-                      color: checked ? "#16a072" : "#695a82",
-                      textDecoration: checked ? "line-through" : "none",
-                      fontWeight: checked ? 900 : 800,
-                      letterSpacing: 1.6,
-                      transition: "color .22s"
-                    }}>
-                      {task}
-                    </span>
-                  </label>
-                  {checked &&
-                    <span style={{
-                      marginLeft: 12,
-                      color: "#21bf8f", fontWeight: 900, fontSize: 26
-                    }}>✓</span>}
-                  {editMode &&
-                    <button
-                      style={{
-                        color: "#f8638e", background: "#fff0",
-                        border: "none", marginLeft: 19, cursor: "pointer", fontSize: 18
-                      }}
-                      onClick={() => deleteTask(cat, idx2)}
-                    >删除</button>
-                  }
-                </li>
-              );
-            })}
-          </ul>
-          {editMode && (
-            <div style={{ marginTop: 18, display: "flex", gap: 13 }}>
-              <input
-                style={{
-                  flex: 1,
-                  borderRadius: 13,
-                  border: "1.7px solid #fc8591",
-                  padding: "8px 15px",
-                  fontSize: 18,
-                  outline: "none"
-                }}
-                value={newTaskName[cat] || ""}
-                placeholder="新增任务名称"
-                onChange={e => setNewTaskName({ ...newTaskName, [cat]: e.target.value })}
-              />
-              <button
-                onClick={() => addTask(cat)}
-                style={{
-                  background: "#fc8591",
-                  color: "#fff",
-                  border: "none",
-                  borderRadius: 13,
-                  padding: "6px 24px",
-                  fontWeight: 900,
-                  fontSize: 22,
-                  letterSpacing: 1.2,
-                  cursor: "pointer",
-                  marginLeft: 3
-                }}
-              >+</button>
-            </div>
-          )}
-        </div>
+                    fontSize: 16,
+                    cursor: "pointer"
+                  }}
+                >+</button>
+              </div>
+            )}
+          </div>
+        )
       ))}
 
       <div style={{
-        margin: "26px 0 0 0", color: "#ffac77", fontWeight: 900,
-        fontSize: award ? 21 : 16, textAlign: "center", minHeight: 28
+        margin: "24px 0 0 0", color: "#ffac77", fontWeight: 800,
+        fontSize: award ? 18 : 14, textAlign: "center", minHeight: 24
       }}>
         {award}
       </div>
 
       <div style={{
-        marginTop: 36, color: "#888", textAlign: "center", fontSize: 15, lineHeight: 1.8
+        marginTop: 32, color: "#888", textAlign: "center", fontSize: 13, lineHeight: 1.6
       }}>
-        完成时间段建议：18:15-20:00<br />
-        含30分钟吃饭+5分钟休息。<br />
-        （部分作业可在校已完成，仅需在此打卡）
+        💡 建议完成时间：18:15-20:00<br />
+        包含30分钟吃饭时间 + 5分钟休息<br />
+        <span style={{ fontSize: 11, color: "#aaa" }}>
+          （部分作业可在校完成，此处仅需打卡确认）
+        </span>
       </div>
     </div>
   );
