@@ -8,6 +8,30 @@ const DEFAULT_TASKS = {
   运动: ["跑步", "跳绳"]
 };
 
+// 荣誉称号配置
+const BADGES = {
+  daily: [
+    { id: 'perfect_day', name: '完美一天', icon: '⭐', condition: '单日完成率100%', color: '#FFD700' },
+    { id: 'early_bird', name: '早起鸟儿', icon: '🐤', condition: '早上8点前完成所有任务', color: '#FFA500' },
+    { id: 'night_owl', name: '夜猫子', icon: '🦉', condition: '晚上8点后完成所有任务', color: '#4B0082' }
+  ],
+  weekly: [
+    { id: 'week_warrior', name: '周冠军', icon: '🏆', condition: '连续7天全部完成', color: '#FF6B6B' },
+    { id: 'consistency_5', name: '坚持大师', icon: '💪', condition: '连续5天完成率≥80%', color: '#4ECDC4' },
+    { id: 'study_master', name: '学习达人', icon: '📚', condition: '一周内完成50个任务', color: '#95E1D3' }
+  ],
+  monthly: [
+    { id: 'month_champion', name: '月度冠军', icon: '👑', condition: '月完成率≥90%', color: '#FF1744' },
+    { id: 'perfect_month', name: '完美月份', icon: '🌟', condition: '整月无缺勤', color: '#FFD700' },
+    { id: 'super_learner', name: '超级学霸', icon: '🎓', condition: '月完成200个任务', color: '#7C4DFF' }
+  ],
+  special: [
+    { id: 'hundred_days', name: '百日坚持', icon: '💯', condition: '累计完成100天', color: '#FF6B81' },
+    { id: 'task_1000', name: '千锤百炼', icon: '⚡', condition: '累计完成1000个任务', color: '#5F8EF7' },
+    { id: 'all_rounder', name: '全能选手', icon: '🌈', condition: '所有学科均衡发展', color: '#22C993' }
+  ]
+};
+
 function getToday() {
   const d = new Date();
   return d.toISOString().split("T")[0];
@@ -26,6 +50,31 @@ function getWeekDates(dateStr) {
     res.push(d.toISOString().split("T")[0]);
   }
   return res;
+}
+
+// 获取月份日期列表
+function getMonthDates(dateStr) {
+  const date = new Date(dateStr);
+  const year = date.getFullYear();
+  const month = date.getMonth();
+  const firstDay = new Date(year, month, 1);
+  const lastDay = new Date(year, month + 1, 0);
+  const dates = [];
+  
+  for (let d = new Date(firstDay); d <= lastDay; d.setDate(d.getDate() + 1)) {
+    dates.push(d.toISOString().split("T")[0]);
+  }
+  
+  return dates;
+}
+
+// 获取年度月份列表
+function getYearMonths(year) {
+  const months = [];
+  for (let i = 0; i < 12; i++) {
+    months.push(`${year}-${String(i + 1).padStart(2, '0')}`);
+  }
+  return months;
 }
 
 // 格式化日期显示
@@ -60,16 +109,23 @@ function ProgressBar({ percent }) {
 }
 
 // 统计卡片组件
-function StatsCard({ title, value, subtitle, color }) {
+function StatsCard({ title, value, subtitle, color, onClick }) {
   return (
-    <div style={{
-      background: `linear-gradient(135deg, ${color}20, ${color}10)`,
-      borderRadius: 16,
-      padding: "12px 16px",
-      textAlign: "center",
-      border: `1px solid ${color}30`,
-      flex: 1
-    }}>
+    <div 
+      style={{
+        background: `linear-gradient(135deg, ${color}20, ${color}10)`,
+        borderRadius: 16,
+        padding: "12px 16px",
+        textAlign: "center",
+        border: `1px solid ${color}30`,
+        flex: 1,
+        cursor: onClick ? 'pointer' : 'default',
+        transition: 'transform 0.2s'
+      }}
+      onClick={onClick}
+      onMouseEnter={e => onClick && (e.currentTarget.style.transform = 'scale(1.05)')}
+      onMouseLeave={e => onClick && (e.currentTarget.style.transform = 'scale(1)')}
+    >
       <div style={{ fontSize: 20, fontWeight: 900, color, marginBottom: 4 }}>
         {value}
       </div>
@@ -85,6 +141,44 @@ function StatsCard({ title, value, subtitle, color }) {
   );
 }
 
+// 荣誉徽章组件
+function Badge({ badge, earned, size = 'normal' }) {
+  const sizeMap = {
+    small: { icon: 24, text: 10 },
+    normal: { icon: 36, text: 12 },
+    large: { icon: 48, text: 14 }
+  };
+  
+  const s = sizeMap[size];
+  
+  return (
+    <div style={{
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      opacity: earned ? 1 : 0.3,
+      filter: earned ? 'none' : 'grayscale(100%)',
+      transition: 'all 0.3s'
+    }}>
+      <div style={{
+        fontSize: s.icon,
+        marginBottom: 4,
+        filter: earned ? `drop-shadow(0 0 8px ${badge.color}50)` : 'none'
+      }}>
+        {badge.icon}
+      </div>
+      <div style={{
+        fontSize: s.text,
+        fontWeight: 700,
+        color: earned ? badge.color : '#999',
+        textAlign: 'center'
+      }}>
+        {badge.name}
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [date, setDate] = useState(getToday());
   const [dailyTasks, setDailyTasks] = useState({});
@@ -96,7 +190,9 @@ export default function App() {
   const [syncStatus, setSyncStatus] = useState('local');
   const [syncCode, setSyncCode] = useState('');
   const [showSyncPanel, setShowSyncPanel] = useState(false);
-  const [showStats, setShowStats] = useState(false);
+  const [viewMode, setViewMode] = useState('week'); // week, month, year
+  const [showBadges, setShowBadges] = useState(false);
+  const [earnedBadges, setEarnedBadges] = useState([]);
 
   // 获取当前日期的任务配置
   const tasks = dailyTasks[date] || DEFAULT_TASKS;
@@ -104,10 +200,12 @@ export default function App() {
   // 初始化数据
   useEffect(() => {
     loadLocalData();
-    generateOrLoadSyncCode();
+    const code = localStorage.getItem("userSyncCode") || generateSyncCode();
+    localStorage.setItem("userSyncCode", code);
+    setSyncCode(code);
   }, []);
 
-  // 自动保存 - 修复同步问题
+  // 自动保存和同步
   useEffect(() => {
     const timer = setTimeout(() => {
       if (Object.keys(records).length > 0 || Object.keys(dailyTasks).length > 0) {
@@ -117,24 +215,20 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [records, dailyTasks]);
 
-  // 立即同步当前数据到云端
+  // 检查并更新获得的徽章
   useEffect(() => {
-    if (syncCode && (Object.keys(records).length > 0 || Object.keys(dailyTasks).length > 0)) {
-      const syncData = {
-        records,
-        dailyTasks,
-        lastUpdate: new Date().toISOString()
-      };
-      saveToIndexedDB(syncCode, syncData).catch(error => {
-        console.error('自动同步失败:', error);
-      });
-    }
-  }, [syncCode, records, dailyTasks]);
+    checkBadges();
+  }, [records, dailyTasks]);
+
+  function generateSyncCode() {
+    return Math.random().toString(36).substring(2, 8).toUpperCase();
+  }
 
   function loadLocalData() {
     try {
       const localRecords = localStorage.getItem("taskRecords");
       const localDailyTasks = localStorage.getItem("dailyTasksConfig");
+      const localBadges = localStorage.getItem("earnedBadges");
       
       if (localRecords) {
         setRecords(JSON.parse(localRecords));
@@ -142,25 +236,20 @@ export default function App() {
       if (localDailyTasks) {
         setDailyTasks(JSON.parse(localDailyTasks));
       }
+      if (localBadges) {
+        setEarnedBadges(JSON.parse(localBadges));
+      }
     } catch (error) {
       console.error('加载本地数据失败:', error);
       setSyncStatus('error');
     }
   }
 
-  function generateOrLoadSyncCode() {
-    let code = localStorage.getItem("syncCode");
-    if (!code) {
-      code = Math.random().toString(36).substring(2, 8).toUpperCase();
-      localStorage.setItem("syncCode", code);
-    }
-    setSyncCode(code);
-  }
-
   function saveData(newRecords = records, newDailyTasks = dailyTasks) {
     try {
       localStorage.setItem("taskRecords", JSON.stringify(newRecords));
       localStorage.setItem("dailyTasksConfig", JSON.stringify(newDailyTasks));
+      localStorage.setItem("earnedBadges", JSON.stringify(earnedBadges));
       syncToCloud(newRecords, newDailyTasks);
     } catch (error) {
       console.error('保存数据失败:', error);
@@ -174,7 +263,9 @@ export default function App() {
       const data = {
         records: recordsData,
         dailyTasks: dailyTasksData,
-        lastUpdate: new Date().toISOString()
+        earnedBadges: earnedBadges,
+        lastUpdate: new Date().toISOString(),
+        syncCode: syncCode
       };
       
       await saveToIndexedDB(syncCode, data);
@@ -189,170 +280,120 @@ export default function App() {
 
   function saveToIndexedDB(code, data) {
     return new Promise((resolve, reject) => {
-      try {
-        console.log('准备保存同步数据:', { code, recordsCount: Object.keys(data.records || {}).length });
+      const request = indexedDB.open('TaskSync', 2);
+      
+      request.onerror = () => reject(request.error);
+      
+      request.onupgradeneeded = (event) => {
+        const db = event.target.result;
+        if (!db.objectStoreNames.contains('tasks')) {
+          db.createObjectStore('tasks', { keyPath: 'code' });
+        }
+      };
+      
+      request.onsuccess = (event) => {
+        const db = event.target.result;
+        const transaction = db.transaction(['tasks'], 'readwrite');
+        const store = transaction.objectStore('tasks');
         
-        const request = indexedDB.open('TaskSync', 1);
+        const putRequest = store.put({ code, ...data });
         
-        request.onerror = () => {
-          console.error('IndexedDB open error:', request.error);
-          reject(request.error);
-        };
-        
-        request.onupgradeneeded = (event) => {
-          try {
-            const db = event.target.result;
-            if (!db.objectStoreNames.contains('tasks')) {
-              const store = db.createObjectStore('tasks', { keyPath: 'code' });
-              console.log('创建了新的对象存储');
-            }
-          } catch (error) {
-            console.error('IndexedDB upgrade error:', error);
-            reject(error);
-          }
-        };
-        
-        request.onsuccess = (event) => {
-          try {
-            const db = event.target.result;
-            const transaction = db.transaction(['tasks'], 'readwrite');
-            const store = transaction.objectStore('tasks');
-            
-            const dataToSave = { 
-              code, 
-              records: data.records || {},
-              dailyTasks: data.dailyTasks || {},
-              lastUpdate: data.lastUpdate || new Date().toISOString(),
-              deviceInfo: {
-                userAgent: navigator.userAgent.substring(0, 100),
-                timestamp: Date.now()
-              }
-            };
-            
-            const putRequest = store.put(dataToSave);
-            
-            putRequest.onsuccess = () => {
-              console.log('同步数据保存成功:', code);
-              resolve();
-            };
-            
-            putRequest.onerror = () => {
-              console.error('IndexedDB put error:', putRequest.error);
-              reject(putRequest.error);
-            };
-            
-            transaction.onerror = () => {
-              console.error('IndexedDB transaction error:', transaction.error);
-              reject(transaction.error);
-            };
-          } catch (error) {
-            console.error('IndexedDB operation error:', error);
-            reject(error);
-          }
-        };
-      } catch (error) {
-        console.error('IndexedDB setup error:', error);
-        reject(error);
-      }
+        putRequest.onsuccess = () => resolve();
+        putRequest.onerror = () => reject(putRequest.error);
+      };
     });
   }
 
   function loadFromIndexedDB(code) {
     return new Promise((resolve, reject) => {
-      try {
-        console.log('尝试加载同步数据:', code);
+      const request = indexedDB.open('TaskSync', 2);
+      
+      request.onerror = () => reject(new Error('无法打开数据库'));
+      
+      request.onupgradeneeded = (event) => {
+        const db = event.target.result;
+        if (!db.objectStoreNames.contains('tasks')) {
+          db.createObjectStore('tasks', { keyPath: 'code' });
+        }
+      };
+      
+      request.onsuccess = (event) => {
+        const db = event.target.result;
+        const transaction = db.transaction(['tasks'], 'readonly');
+        const store = transaction.objectStore('tasks');
+        const getRequest = store.get(code);
         
-        const request = indexedDB.open('TaskSync', 1);
-        
-        request.onerror = () => {
-          console.error('IndexedDB open error:', request.error);
-          reject(new Error('无法打开数据库'));
-        };
-        
-        request.onupgradeneeded = (event) => {
-          try {
-            const db = event.target.result;
-            if (!db.objectStoreNames.contains('tasks')) {
-              db.createObjectStore('tasks', { keyPath: 'code' });
-              console.log('数据库初始化完成，但没有现有数据');
-            }
-          } catch (error) {
-            console.error('IndexedDB upgrade error:', error);
-            reject(error);
+        getRequest.onsuccess = () => {
+          if (getRequest.result) {
+            resolve(getRequest.result);
+          } else {
+            reject(new Error(`未找到同步码 ${code} 对应的数据`));
           }
         };
         
-        request.onsuccess = (event) => {
-          try {
-            const db = event.target.result;
-            
-            // 检查对象存储是否存在
-            if (!db.objectStoreNames.contains('tasks')) {
-              reject(new Error('数据库结构异常，请重试'));
-              return;
-            }
-            
-            const transaction = db.transaction(['tasks'], 'readonly');
-            const store = transaction.objectStore('tasks');
-            
-            // 先列出所有可用的同步码进行调试
-            const getAllRequest = store.getAll();
-            getAllRequest.onsuccess = () => {
-              const allData = getAllRequest.result;
-              console.log('数据库中所有同步码:', allData.map(item => item.code));
-              
-              // 现在尝试获取特定的同步码
-              const getRequest = store.get(code);
-              
-              getRequest.onsuccess = () => {
-                if (getRequest.result) {
-                  console.log('找到同步数据:', {
-                    code: getRequest.result.code,
-                    recordsCount: Object.keys(getRequest.result.records || {}).length,
-                    dailyTasksCount: Object.keys(getRequest.result.dailyTasks || {}).length,
-                    lastUpdate: getRequest.result.lastUpdate
-                  });
-                  resolve(getRequest.result);
-                } else {
-                  console.log(`未找到同步码 ${code}，可用的同步码:`, allData.map(item => item.code));
-                  reject(new Error(`未找到同步码 ${code} 对应的数据。可用的同步码: ${allData.map(item => item.code).join(', ')}`));
-                }
-              };
-              
-              getRequest.onerror = () => {
-                console.error('IndexedDB get error:', getRequest.error);
-                reject(new Error('读取数据失败'));
-              };
-            };
-            
-            getAllRequest.onerror = () => {
-              console.error('获取所有数据失败:', getAllRequest.error);
-              // 继续尝试获取特定数据
-              const getRequest = store.get(code);
-              getRequest.onsuccess = () => {
-                if (getRequest.result) {
-                  resolve(getRequest.result);
-                } else {
-                  reject(new Error(`未找到同步码 ${code} 对应的数据`));
-                }
-              };
-              getRequest.onerror = () => reject(new Error('读取数据失败'));
-            };
-            
-            transaction.onerror = () => {
-              console.error('IndexedDB transaction error:', transaction.error);
-              reject(new Error('数据库操作失败'));
-            };
-          } catch (error) {
-            console.error('IndexedDB operation error:', error);
-            reject(new Error('数据库操作异常'));
-          }
-        };
-      } catch (error) {
-        console.error('IndexedDB setup error:', error);
-        reject(new Error('数据库初始化失败'));
-      }
+        getRequest.onerror = () => reject(new Error('读取数据失败'));
+      };
     });
+  }
+
+  // 检查徽章获得情况
+  function checkBadges() {
+    const newBadges = [...earnedBadges];
+    
+    // 检查日常徽章
+    const todayRecord = records[date];
+    if (todayRecord) {
+      const todayStats = getDayStats(date);
+      if (todayStats.percent === 100 && !newBadges.includes('perfect_day')) {
+        newBadges.push('perfect_day');
+      }
+    }
+    
+    // 检查周徽章
+    const weekDates = getWeekDates(date);
+    let weekPerfectDays = 0;
+    let weekTotalTasks = 0;
+    
+    weekDates.forEach(day => {
+      const stats = getDayStats(day);
+      if (stats.percent === 100) weekPerfectDays++;
+      weekTotalTasks += stats.done;
+    });
+    
+    if (weekPerfectDays === 7 && !newBadges.includes('week_warrior')) {
+      newBadges.push('week_warrior');
+    }
+    
+    if (weekTotalTasks >= 50 && !newBadges.includes('study_master')) {
+      newBadges.push('study_master');
+    }
+    
+    // 检查月度徽章
+    const monthDates = getMonthDates(date);
+    const monthStats = getMonthStats(monthDates[0]);
+    
+    if (monthStats.percent >= 90 && !newBadges.includes('month_champion')) {
+      newBadges.push('month_champion');
+    }
+    
+    // 检查特殊徽章
+    const allDays = Object.keys(records).length;
+    if (allDays >= 100 && !newBadges.includes('hundred_days')) {
+      newBadges.push('hundred_days');
+    }
+    
+    let totalCompletedTasks = 0;
+    Object.values(records).forEach(dayRecord => {
+      Object.values(dayRecord).forEach(categoryTasks => {
+        totalCompletedTasks += categoryTasks.filter(t => t).length;
+      });
+    });
+    
+    if (totalCompletedTasks >= 1000 && !newBadges.includes('task_1000')) {
+      newBadges.push('task_1000');
+    }
+    
+    setEarnedBadges(newBadges);
   }
 
   function getTaskStatus(cat, taskIndex, dateStr) {
@@ -484,53 +525,68 @@ export default function App() {
     
     try {
       setSyncStatus('saving');
-      console.log('开始同步，目标同步码:', targetCode);
       
       const data = await loadFromIndexedDB(targetCode);
-      console.log('同步数据获取成功:', data);
       
-      // 验证数据格式
       if (!data.records && !data.dailyTasks) {
         throw new Error('同步数据格式不正确');
       }
       
       const newRecords = data.records || {};
       const newDailyTasks = data.dailyTasks || {};
+      const newBadges = data.earnedBadges || [];
       
-      // 更新状态
       setRecords(newRecords);
       setDailyTasks(newDailyTasks);
+      setEarnedBadges(newBadges);
       
-      // 保存到本地存储
+      // 更新本地同步码为目标同步码
+      localStorage.setItem("userSyncCode", targetCode);
+      setSyncCode(targetCode);
+      
       localStorage.setItem("taskRecords", JSON.stringify(newRecords));
       localStorage.setItem("dailyTasksConfig", JSON.stringify(newDailyTasks));
+      localStorage.setItem("earnedBadges", JSON.stringify(newBadges));
       
       setSyncStatus('synced');
-      alert(`数据同步成功！\n同步了 ${Object.keys(newRecords).length} 天的记录数据`);
+      alert(`数据同步成功！\n同步了 ${Object.keys(newRecords).length} 天的记录数据\n获得了 ${newBadges.length} 个徽章`);
       setTimeout(() => setSyncStatus('local'), 2000);
       
-      // 关闭同步面板
       setShowSyncPanel(false);
       
     } catch (error) {
       console.error('同步失败:', error);
       setSyncStatus('error');
-      
-      let errorMessage = '同步失败：';
-      if (error.message.includes('未找到')) {
-        errorMessage += `同步码 ${targetCode} 不存在，请检查是否输入正确`;
-      } else if (error.message.includes('数据库')) {
-        errorMessage += '数据库访问异常，请稍后重试';
-      } else {
-        errorMessage += error.message || '未知错误';
-      }
-      
-      alert(errorMessage);
+      alert(`同步失败：${error.message}`);
       setTimeout(() => setSyncStatus('local'), 3000);
     }
   }
 
-  // 统计数据计算
+  // 获取单日统计
+  function getDayStats(day) {
+    const rec = records[day] || {};
+    const dayTasks = dailyTasks[day] || DEFAULT_TASKS;
+    let total = 0, done = 0;
+    
+    Object.keys(dayTasks).forEach(cat => {
+      total += dayTasks[cat].length;
+      if (rec[cat]) {
+        const currentTaskCount = dayTasks[cat].length;
+        const statusArray = rec[cat];
+        for (let i = 0; i < Math.min(statusArray.length, currentTaskCount); i++) {
+          if (statusArray[i]) done++;
+        }
+      }
+    });
+    
+    return { 
+      total, 
+      done, 
+      percent: total ? Math.round((done / total) * 100) : 0 
+    };
+  }
+
+  // 获取周统计
   function getWeekStats() {
     const weekDates = getWeekDates(weekStart);
     let totalTasks = 0;
@@ -538,74 +594,95 @@ export default function App() {
     let completeDays = 0;
     
     weekDates.forEach(day => {
-      const dayTasks = dailyTasks[day] || DEFAULT_TASKS;
-      const dayRecord = records[day] || {};
-      let dayTotal = 0;
-      let dayCompleted = 0;
-      
-      Object.keys(dayTasks).forEach(cat => {
-        dayTotal += dayTasks[cat].length;
-        if (dayRecord[cat]) {
-          const statusArray = dayRecord[cat];
-          const taskCount = dayTasks[cat].length;
-          for (let i = 0; i < Math.min(statusArray.length, taskCount); i++) {
-            if (statusArray[i]) dayCompleted++;
-          }
-        }
-      });
-      
-      totalTasks += dayTotal;
-      completedTasks += dayCompleted;
-      if (dayTotal > 0 && dayCompleted === dayTotal) completeDays++;
+      const stats = getDayStats(day);
+      totalTasks += stats.total;
+      completedTasks += stats.done;
+      if (stats.percent === 100 && stats.total > 0) completeDays++;
     });
     
     return { totalTasks, completedTasks, completeDays };
   }
 
-  // 进度计算
-  const today = records[date] || {};
-  let total = 0, done = 0;
-  Object.keys(tasks).forEach(cat => {
-    total += tasks[cat].length;
-    if (today[cat]) {
-      const currentTaskCount = tasks[cat].length;
-      const statusArray = today[cat];
-      for (let i = 0; i < Math.min(statusArray.length, currentTaskCount); i++) {
-        if (statusArray[i]) done++;
+  // 获取月统计
+  function getMonthStats(monthStart) {
+    const monthDates = getMonthDates(monthStart);
+    let totalTasks = 0;
+    let completedTasks = 0;
+    let completeDays = 0;
+    let activeDays = 0;
+    
+    monthDates.forEach(day => {
+      const stats = getDayStats(day);
+      if (stats.total > 0) {
+        activeDays++;
+        totalTasks += stats.total;
+        completedTasks += stats.done;
+        if (stats.percent === 100) completeDays++;
       }
-    }
-  });
-  const percent = total ? Math.round((done / total) * 100) : 0;
+    });
+    
+    return { 
+      totalTasks, 
+      completedTasks, 
+      completeDays,
+      activeDays,
+      percent: totalTasks ? Math.round((completedTasks / totalTasks) * 100) : 0
+    };
+  }
+
+  // 获取年度统计
+  function getYearStats(year) {
+    let totalTasks = 0;
+    let completedTasks = 0;
+    let activeDays = 0;
+    let perfectMonths = 0;
+    
+    const months = getYearMonths(year);
+    const monthlyStats = [];
+    
+    months.forEach(month => {
+      const monthStats = getMonthStats(`${month}-01`);
+      monthlyStats.push({
+        month,
+        ...monthStats
+      });
+      
+      totalTasks += monthStats.totalTasks;
+      completedTasks += monthStats.completedTasks;
+      activeDays += monthStats.activeDays;
+      
+      if (monthStats.percent >= 90 && monthStats.activeDays >= 20) {
+        perfectMonths++;
+      }
+    });
+    
+    return {
+      totalTasks,
+      completedTasks,
+      activeDays,
+      perfectMonths,
+      monthlyStats,
+      percent: totalTasks ? Math.round((completedTasks / totalTasks) * 100) : 0
+    };
+  }
+
+  // 进度计算
+  const todayStats = getDayStats(date);
+  const percent = todayStats.percent;
   
   let award = null;
-  if (percent === 100 && total > 0) award = "🎉 全部完成！太棒了！";
+  if (percent === 100 && todayStats.total > 0) award = "🎉 全部完成！太棒了！";
   else if (percent >= 80) award = "🌟 还差一点就全部完成啦，加油！";
   else if (percent >= 50) award = "💪 已经完成一半了，继续努力！";
-  else if (done > 0) award = `已完成 ${done}/${total} 项，继续加油！`;
+  else if (todayStats.done > 0) award = `已完成 ${todayStats.done}/${todayStats.total} 项，继续加油！`;
 
   const tabColors = [
     "#ff6b81", "#5f8ef7", "#22c993", "#ffb549", "#ae8afc", "#ec8ad9"
   ];
-  const weekDates = getWeekDates(weekStart);
   
-  function getDayProgress(day) {
-    const rec = records[day] || {};
-    const dayTasks = dailyTasks[day] || DEFAULT_TASKS;
-    let t = 0, d = 0;
-    Object.keys(dayTasks).forEach(cat => {
-      t += dayTasks[cat].length;
-      if (rec[cat]) {
-        const currentTaskCount = dayTasks[cat].length;
-        const statusArray = rec[cat];
-        for (let i = 0; i < Math.min(statusArray.length, currentTaskCount); i++) {
-          if (statusArray[i]) d++;
-        }
-      }
-    });
-    return t ? Math.round((d / t) * 100) : 0;
-  }
-
-  const weekStats = getWeekStats();
+  const weekDates = getWeekDates(weekStart);
+  const currentMonth = date.substring(0, 7);
+  const currentYear = new Date(date).getFullYear();
 
   return (
     <div style={{
@@ -619,16 +696,56 @@ export default function App() {
         display: "flex", justifyContent: "space-between", alignItems: "center",
         marginBottom: 16
       }}>
-        <button 
-          onClick={() => setShowStats(!showStats)}
-          style={{
-            background: "rgba(255,255,255,0.8)", border: "1px solid #ddd",
-            borderRadius: 12, padding: "6px 12px", cursor: "pointer",
-            fontSize: 12, color: "#666"
-          }}
-        >
-          📊 统计
-        </button>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button 
+            onClick={() => setViewMode('week')}
+            style={{
+              background: viewMode === 'week' ? "#5f8ef7" : "rgba(255,255,255,0.8)", 
+              border: "1px solid #ddd",
+              borderRadius: 12, padding: "6px 12px", cursor: "pointer",
+              fontSize: 12, color: viewMode === 'week' ? "#fff" : "#666",
+              fontWeight: 700
+            }}
+          >
+            周
+          </button>
+          <button 
+            onClick={() => setViewMode('month')}
+            style={{
+              background: viewMode === 'month' ? "#22c993" : "rgba(255,255,255,0.8)", 
+              border: "1px solid #ddd",
+              borderRadius: 12, padding: "6px 12px", cursor: "pointer",
+              fontSize: 12, color: viewMode === 'month' ? "#fff" : "#666",
+              fontWeight: 700
+            }}
+          >
+            月
+          </button>
+          <button 
+            onClick={() => setViewMode('year')}
+            style={{
+              background: viewMode === 'year' ? "#ff6b81" : "rgba(255,255,255,0.8)", 
+              border: "1px solid #ddd",
+              borderRadius: 12, padding: "6px 12px", cursor: "pointer",
+              fontSize: 12, color: viewMode === 'year' ? "#fff" : "#666",
+              fontWeight: 700
+            }}
+          >
+            年
+          </button>
+          <button 
+            onClick={() => setShowBadges(!showBadges)}
+            style={{
+              background: showBadges ? "#ffb549" : "rgba(255,255,255,0.8)", 
+              border: "1px solid #ddd",
+              borderRadius: 12, padding: "6px 12px", cursor: "pointer",
+              fontSize: 12, color: showBadges ? "#fff" : "#666",
+              fontWeight: 700
+            }}
+          >
+            🏆
+          </button>
+        </div>
         
         {/* 同步状态 */}
         <div style={{
@@ -654,33 +771,235 @@ export default function App() {
         </div>
       </div>
 
-      {/* 统计面板 */}
-      {showStats && (
+      {/* 荣誉墙 */}
+      {showBadges && (
+        <div style={{
+          background: "rgba(255,255,255,0.95)", borderRadius: 16,
+          padding: 16, marginBottom: 16, border: "1px solid #eee",
+          maxHeight: 400, overflowY: 'auto'
+        }}>
+          <h3 style={{ margin: "0 0 16px 0", color: "#333", textAlign: "center" }}>
+            🏆 荣誉墙
+          </h3>
+          
+          <div style={{ marginBottom: 20 }}>
+            <h4 style={{ color: "#666", fontSize: 14, marginBottom: 12 }}>日常成就</h4>
+            <div style={{ display: "flex", gap: 16, flexWrap: "wrap", justifyContent: "center" }}>
+              {BADGES.daily.map(badge => (
+                <Badge 
+                  key={badge.id} 
+                  badge={badge} 
+                  earned={earnedBadges.includes(badge.id)}
+                />
+              ))}
+            </div>
+          </div>
+          
+          <div style={{ marginBottom: 20 }}>
+            <h4 style={{ color: "#666", fontSize: 14, marginBottom: 12 }}>周成就</h4>
+            <div style={{ display: "flex", gap: 16, flexWrap: "wrap", justifyContent: "center" }}>
+              {BADGES.weekly.map(badge => (
+                <Badge 
+                  key={badge.id} 
+                  badge={badge} 
+                  earned={earnedBadges.includes(badge.id)}
+                />
+              ))}
+            </div>
+          </div>
+          
+          <div style={{ marginBottom: 20 }}>
+            <h4 style={{ color: "#666", fontSize: 14, marginBottom: 12 }}>月度成就</h4>
+            <div style={{ display: "flex", gap: 16, flexWrap: "wrap", justifyContent: "center" }}>
+              {BADGES.monthly.map(badge => (
+                <Badge 
+                  key={badge.id} 
+                  badge={badge} 
+                  earned={earnedBadges.includes(badge.id)}
+                />
+              ))}
+            </div>
+          </div>
+          
+          <div>
+            <h4 style={{ color: "#666", fontSize: 14, marginBottom: 12 }}>特殊成就</h4>
+            <div style={{ display: "flex", gap: 16, flexWrap: "wrap", justifyContent: "center" }}>
+              {BADGES.special.map(badge => (
+                <Badge 
+                  key={badge.id} 
+                  badge={badge} 
+                  earned={earnedBadges.includes(badge.id)}
+                />
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 统计面板 - 根据不同视图模式显示 */}
+      {viewMode === 'week' && (
         <div style={{
           background: "rgba(255,255,255,0.9)", borderRadius: 16,
           padding: 16, marginBottom: 16, border: "1px solid #eee"
         }}>
           <h4 style={{ margin: "0 0 12px 0", color: "#333", textAlign: "center" }}>
-            本周统计 ({weekDates[0]} ~ {weekDates[6]})
+            本周统计
           </h4>
           <div style={{ display: "flex", gap: 8 }}>
             <StatsCard 
               title="完成天数" 
-              value={weekStats.completeDays} 
+              value={getWeekStats().completeDays} 
               subtitle="/ 7天"
               color="#22c993" 
             />
             <StatsCard 
               title="完成任务" 
-              value={weekStats.completedTasks} 
-              subtitle={`/ ${weekStats.totalTasks}项`}
+              value={getWeekStats().completedTasks} 
+              subtitle={`/ ${getWeekStats().totalTasks}项`}
               color="#5f8ef7" 
             />
             <StatsCard 
               title="完成率" 
-              value={`${weekStats.totalTasks ? Math.round((weekStats.completedTasks / weekStats.totalTasks) * 100) : 0}%`}
+              value={`${getWeekStats().totalTasks ? Math.round((getWeekStats().completedTasks / getWeekStats().totalTasks) * 100) : 0}%`}
               color="#ff6b81" 
             />
+          </div>
+        </div>
+      )}
+
+      {viewMode === 'month' && (
+        <div style={{
+          background: "rgba(255,255,255,0.9)", borderRadius: 16,
+          padding: 16, marginBottom: 16, border: "1px solid #eee"
+        }}>
+          <h4 style={{ margin: "0 0 12px 0", color: "#333", textAlign: "center" }}>
+            {currentMonth} 月度统计
+          </h4>
+          <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+            <StatsCard 
+              title="活跃天数" 
+              value={getMonthStats(currentMonth + '-01').activeDays} 
+              subtitle="天"
+              color="#22c993" 
+            />
+            <StatsCard 
+              title="完成任务" 
+              value={getMonthStats(currentMonth + '-01').completedTasks} 
+              subtitle={`/ ${getMonthStats(currentMonth + '-01').totalTasks}项`}
+              color="#5f8ef7" 
+            />
+            <StatsCard 
+              title="月完成率" 
+              value={`${getMonthStats(currentMonth + '-01').percent}%`}
+              color="#ff6b81" 
+            />
+          </div>
+          <div style={{
+            display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4,
+            fontSize: 10, textAlign: "center"
+          }}>
+            {["一","二","三","四","五","六","日"].map(day => (
+              <div key={day} style={{ fontWeight: 700, color: "#999" }}>{day}</div>
+            ))}
+            {(() => {
+              const monthDates = getMonthDates(currentMonth + '-01');
+              const firstDay = new Date(monthDates[0]).getDay() || 7;
+              const emptyCells = Array(firstDay - 1).fill(null);
+              
+              return [...emptyCells, ...monthDates].map((day, idx) => {
+                if (!day) return <div key={`empty-${idx}`} />;
+                const stats = getDayStats(day);
+                const isToday = day === getToday();
+                
+                return (
+                  <div 
+                    key={day}
+                    onClick={() => setDate(day)}
+                    style={{
+                      aspectRatio: 1,
+                      background: stats.percent === 100 ? '#22c993' : 
+                                stats.percent >= 80 ? '#5f8ef7' :
+                                stats.percent >= 50 ? '#ffb549' :
+                                stats.percent > 0 ? '#ff6b81' : '#f0f0f0',
+                      borderRadius: 4,
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      color: stats.percent > 0 ? "white" : "#ccc",
+                      fontWeight: 700,
+                      cursor: "pointer",
+                      border: isToday ? "2px solid #333" : "none",
+                      opacity: stats.total === 0 ? 0.3 : 1
+                    }}
+                  >
+                    {day.slice(8)}
+                  </div>
+                );
+              });
+            })()}
+          </div>
+        </div>
+      )}
+
+      {viewMode === 'year' && (
+        <div style={{
+          background: "rgba(255,255,255,0.9)", borderRadius: 16,
+          padding: 16, marginBottom: 16, border: "1px solid #eee"
+        }}>
+          <h4 style={{ margin: "0 0 12px 0", color: "#333", textAlign: "center" }}>
+            {currentYear} 年度统计
+          </h4>
+          <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+            <StatsCard 
+              title="活跃天数" 
+              value={getYearStats(currentYear).activeDays} 
+              subtitle="天"
+              color="#22c993" 
+            />
+            <StatsCard 
+              title="完成任务" 
+              value={getYearStats(currentYear).completedTasks} 
+              color="#5f8ef7" 
+            />
+            <StatsCard 
+              title="优秀月份" 
+              value={getYearStats(currentYear).perfectMonths} 
+              subtitle="个"
+              color="#ff6b81" 
+            />
+          </div>
+          <div style={{ fontSize: 12 }}>
+            {getYearStats(currentYear).monthlyStats.map((monthStat, idx) => {
+              const monthName = parseInt(monthStat.month.slice(5));
+              return (
+                <div 
+                  key={monthStat.month}
+                  style={{
+                    display: "flex", alignItems: "center", marginBottom: 8,
+                    cursor: "pointer"
+                  }}
+                  onClick={() => {
+                    setViewMode('month');
+                    setDate(monthStat.month + '-01');
+                  }}
+                >
+                  <div style={{ width: 30, fontWeight: 700, color: "#666" }}>
+                    {monthName}月
+                  </div>
+                  <div style={{ flex: 1, height: 20, background: "#f0f0f0", borderRadius: 10, overflow: "hidden" }}>
+                    <div style={{
+                      width: `${monthStat.percent}%`,
+                      height: "100%",
+                      background: monthStat.percent >= 90 ? '#22c993' :
+                               monthStat.percent >= 70 ? '#5f8ef7' :
+                               monthStat.percent >= 50 ? '#ffb549' : '#ff6b81',
+                      transition: "width 0.3s"
+                    }} />
+                  </div>
+                  <div style={{ width: 40, textAlign: "right", fontWeight: 700, marginLeft: 8 }}>
+                    {monthStat.percent}%
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
@@ -729,6 +1048,7 @@ export default function App() {
                 localStorage.clear();
                 setRecords({});
                 setDailyTasks({});
+                setEarnedBadges([]);
                 generateOrLoadSyncCode();
                 alert('数据已清空');
                 window.location.reload();
@@ -780,74 +1100,78 @@ export default function App() {
       }}>
         完成进度：<span style={{
           color: percent === 100 ? "#24bb5f" : "#ff6b81"
-        }}>{done}/{total} ({percent}%)</span>
+        }}>{todayStats.done}/{todayStats.total} ({percent}%)</span>
       </div>
 
       {/* 周视图 */}
-      <div style={{
-        display: "flex", alignItems: "center",
-        gap: 10, margin: "12px 0", justifyContent: "center"
-      }}>
-        <button onClick={() => shiftWeek(-1)}
-          style={{ border: "none", background: "none", color: "#e18e9d", fontSize: 20, fontWeight: 900, cursor: "pointer" }}>«</button>
-        <span style={{ color: "#888", fontWeight: 800, fontSize: 14 }}>
-          {weekDates[0].slice(5)} ~ {weekDates[6].slice(5)}
-        </span>
-        <button onClick={() => shiftWeek(1)}
-          style={{ border: "none", background: "none", color: "#e18e9d", fontSize: 20, fontWeight: 900, cursor: "pointer" }}>»</button>
-      </div>
+      {viewMode === 'week' && (
+        <>
+          <div style={{
+            display: "flex", alignItems: "center",
+            gap: 10, margin: "12px 0", justifyContent: "center"
+          }}>
+            <button onClick={() => shiftWeek(-1)}
+              style={{ border: "none", background: "none", color: "#e18e9d", fontSize: 20, fontWeight: 900, cursor: "pointer" }}>«</button>
+            <span style={{ color: "#888", fontWeight: 800, fontSize: 14 }}>
+              {weekDates[0].slice(5)} ~ {weekDates[6].slice(5)}
+            </span>
+            <button onClick={() => shiftWeek(1)}
+              style={{ border: "none", background: "none", color: "#e18e9d", fontSize: 20, fontWeight: 900, cursor: "pointer" }}>»</button>
+          </div>
 
-      <div style={{
-        display: "flex", justifyContent: "space-between", marginBottom: 16,
-        gap: 3
-      }}>
-        {weekDates.map(day => {
-          const progress = getDayProgress(day);
-          const isToday = day === getToday();
-          const isSelected = day === date;
-          
-          return (
-            <div key={day}
-              style={{
-                flex: 1,
-                background: isSelected ? "linear-gradient(120deg,#fda2c6 60%,#a5dfff 120%)" : "#f8fafd",
-                borderRadius: 16,
-                margin: "0 1px", cursor: "pointer",
-                textAlign: "center", 
-                boxShadow: isSelected ? "0 2px 12px #f0c6f4aa" : undefined,
-                border: isSelected ? "2px solid #ff9eae" : isToday ? "2px solid #ffb549" : "1px solid #eee",
-                fontWeight: 900, 
-                color: isSelected ? "#fff" : isToday ? "#ff9549" : "#ae8afc",
-                padding: "8px 2px", 
-                transition: "all .2s",
-                position: "relative"
-              }}
-              onClick={() => setDate(day)}
-            >
-              {["一","二","三","四","五","六","日"][new Date(day).getDay()===0?6:new Date(day).getDay()-1]}
-              <br/>
-              <span style={{ fontSize: 13 }}>{day.slice(8)}</span>
-              {isToday && (
-                <div style={{
-                  position: "absolute", top: 2, right: 2,
-                  width: 6, height: 6, borderRadius: "50%",
-                  background: "#ffb549"
-                }} />
-              )}
-              <div style={{
-                height: 6, width: "80%", margin: "3px auto 0 auto",
-                background: "#e2e7fd", borderRadius: 3, overflow: "hidden"
-              }}>
-                <div style={{
-                  height: 6, width: `${progress}%`,
-                  background: progress === 100 ? "#14d897" : "#ff80a9",
-                  transition: "width .2s"
-                }} />
-              </div>
-            </div>
-          );
-        })}
-      </div>
+          <div style={{
+            display: "flex", justifyContent: "space-between", marginBottom: 16,
+            gap: 3
+          }}>
+            {weekDates.map(day => {
+              const progress = getDayStats(day).percent;
+              const isToday = day === getToday();
+              const isSelected = day === date;
+              
+              return (
+                <div key={day}
+                  style={{
+                    flex: 1,
+                    background: isSelected ? "linear-gradient(120deg,#fda2c6 60%,#a5dfff 120%)" : "#f8fafd",
+                    borderRadius: 16,
+                    margin: "0 1px", cursor: "pointer",
+                    textAlign: "center", 
+                    boxShadow: isSelected ? "0 2px 12px #f0c6f4aa" : undefined,
+                    border: isSelected ? "2px solid #ff9eae" : isToday ? "2px solid #ffb549" : "1px solid #eee",
+                    fontWeight: 900, 
+                    color: isSelected ? "#fff" : isToday ? "#ff9549" : "#ae8afc",
+                    padding: "8px 2px", 
+                    transition: "all .2s",
+                    position: "relative"
+                  }}
+                  onClick={() => setDate(day)}
+                >
+                  {["一","二","三","四","五","六","日"][new Date(day).getDay()===0?6:new Date(day).getDay()-1]}
+                  <br/>
+                  <span style={{ fontSize: 13 }}>{day.slice(8)}</span>
+                  {isToday && (
+                    <div style={{
+                      position: "absolute", top: 2, right: 2,
+                      width: 6, height: 6, borderRadius: "50%",
+                      background: "#ffb549"
+                    }} />
+                  )}
+                  <div style={{
+                    height: 6, width: "80%", margin: "3px auto 0 auto",
+                    background: "#e2e7fd", borderRadius: 3, overflow: "hidden"
+                  }}>
+                    <div style={{
+                      height: 6, width: `${progress}%`,
+                      background: progress === 100 ? "#14d897" : "#ff80a9",
+                      transition: "width .2s"
+                    }} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
 
       {/* 学科Tab */}
       <div style={{
