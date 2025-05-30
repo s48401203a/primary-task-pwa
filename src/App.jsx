@@ -107,7 +107,7 @@ export default function App() {
     generateOrLoadSyncCode();
   }, []);
 
-  // 自动保存
+  // 自动保存 - 修复同步问题
   useEffect(() => {
     const timer = setTimeout(() => {
       if (Object.keys(records).length > 0 || Object.keys(dailyTasks).length > 0) {
@@ -116,6 +116,20 @@ export default function App() {
     }, 1000);
     return () => clearTimeout(timer);
   }, [records, dailyTasks]);
+
+  // 立即同步当前数据到云端
+  useEffect(() => {
+    if (syncCode && (Object.keys(records).length > 0 || Object.keys(dailyTasks).length > 0)) {
+      const syncData = {
+        records,
+        dailyTasks,
+        lastUpdate: new Date().toISOString()
+      };
+      saveToIndexedDB(syncCode, syncData).catch(error => {
+        console.error('自动同步失败:', error);
+      });
+    }
+  }, [syncCode, records, dailyTasks]);
 
   function loadLocalData() {
     try {
@@ -176,6 +190,8 @@ export default function App() {
   function saveToIndexedDB(code, data) {
     return new Promise((resolve, reject) => {
       try {
+        console.log('准备保存同步数据:', { code, recordsCount: Object.keys(data.records || {}).length });
+        
         const request = indexedDB.open('TaskSync', 1);
         
         request.onerror = () => {
@@ -187,7 +203,8 @@ export default function App() {
           try {
             const db = event.target.result;
             if (!db.objectStoreNames.contains('tasks')) {
-              db.createObjectStore('tasks', { keyPath: 'code' });
+              const store = db.createObjectStore('tasks', { keyPath: 'code' });
+              console.log('创建了新的对象存储');
             }
           } catch (error) {
             console.error('IndexedDB upgrade error:', error);
@@ -201,9 +218,24 @@ export default function App() {
             const transaction = db.transaction(['tasks'], 'readwrite');
             const store = transaction.objectStore('tasks');
             
-            const putRequest = store.put({ code, ...data });
+            const dataToSave = { 
+              code, 
+              records: data.records || {},
+              dailyTasks: data.dailyTasks || {},
+              lastUpdate: data.lastUpdate || new Date().toISOString(),
+              deviceInfo: {
+                userAgent: navigator.userAgent.substring(0, 100),
+                timestamp: Date.now()
+              }
+            };
             
-            putRequest.onsuccess = () => resolve();
+            const putRequest = store.put(dataToSave);
+            
+            putRequest.onsuccess = () => {
+              console.log('同步数据保存成功:', code);
+              resolve();
+            };
+            
             putRequest.onerror = () => {
               console.error('IndexedDB put error:', putRequest.error);
               reject(putRequest.error);
@@ -228,6 +260,8 @@ export default function App() {
   function loadFromIndexedDB(code) {
     return new Promise((resolve, reject) => {
       try {
+        console.log('尝试加载同步数据:', code);
+        
         const request = indexedDB.open('TaskSync', 1);
         
         request.onerror = () => {
@@ -240,6 +274,7 @@ export default function App() {
             const db = event.target.result;
             if (!db.objectStoreNames.contains('tasks')) {
               db.createObjectStore('tasks', { keyPath: 'code' });
+              console.log('数据库初始化完成，但没有现有数据');
             }
           } catch (error) {
             console.error('IndexedDB upgrade error:', error);
@@ -259,21 +294,49 @@ export default function App() {
             
             const transaction = db.transaction(['tasks'], 'readonly');
             const store = transaction.objectStore('tasks');
-            const getRequest = store.get(code);
             
-            getRequest.onsuccess = () => {
-              if (getRequest.result) {
-                console.log('找到同步数据:', getRequest.result);
-                resolve(getRequest.result);
-              } else {
-                console.log('未找到同步码对应的数据:', code);
-                reject(new Error(`未找到同步码 ${code} 对应的数据`));
-              }
+            // 先列出所有可用的同步码进行调试
+            const getAllRequest = store.getAll();
+            getAllRequest.onsuccess = () => {
+              const allData = getAllRequest.result;
+              console.log('数据库中所有同步码:', allData.map(item => item.code));
+              
+              // 现在尝试获取特定的同步码
+              const getRequest = store.get(code);
+              
+              getRequest.onsuccess = () => {
+                if (getRequest.result) {
+                  console.log('找到同步数据:', {
+                    code: getRequest.result.code,
+                    recordsCount: Object.keys(getRequest.result.records || {}).length,
+                    dailyTasksCount: Object.keys(getRequest.result.dailyTasks || {}).length,
+                    lastUpdate: getRequest.result.lastUpdate
+                  });
+                  resolve(getRequest.result);
+                } else {
+                  console.log(`未找到同步码 ${code}，可用的同步码:`, allData.map(item => item.code));
+                  reject(new Error(`未找到同步码 ${code} 对应的数据。可用的同步码: ${allData.map(item => item.code).join(', ')}`));
+                }
+              };
+              
+              getRequest.onerror = () => {
+                console.error('IndexedDB get error:', getRequest.error);
+                reject(new Error('读取数据失败'));
+              };
             };
             
-            getRequest.onerror = () => {
-              console.error('IndexedDB get error:', getRequest.error);
-              reject(new Error('读取数据失败'));
+            getAllRequest.onerror = () => {
+              console.error('获取所有数据失败:', getAllRequest.error);
+              // 继续尝试获取特定数据
+              const getRequest = store.get(code);
+              getRequest.onsuccess = () => {
+                if (getRequest.result) {
+                  resolve(getRequest.result);
+                } else {
+                  reject(new Error(`未找到同步码 ${code} 对应的数据`));
+                }
+              };
+              getRequest.onerror = () => reject(new Error('读取数据失败'));
             };
             
             transaction.onerror = () => {
@@ -635,11 +698,18 @@ export default function App() {
             <div style={{ 
               background: "#f5f5f5", padding: 8, borderRadius: 6,
               fontFamily: "monospace", fontSize: 14, fontWeight: "bold",
-              cursor: "pointer"
+              cursor: "pointer", border: "1px solid #ddd"
             }}
-            onClick={() => navigator.clipboard?.writeText(syncCode)}
+            onClick={() => {
+              navigator.clipboard?.writeText(syncCode);
+              alert('同步码已复制到剪贴板！');
+            }}
             title="点击复制"
             >{syncCode}</div>
+            <div style={{ fontSize: 10, color: "#999", marginTop: 4 }}>
+              数据记录: {Object.keys(records).length} 天 | 
+              任务配置: {Object.keys(dailyTasks).length} 天
+            </div>
           </div>
           <button 
             onClick={syncWithCode}
